@@ -1,0 +1,7 @@
+.{
+    .name = .dvd_logo,
+    .version = "0.0.1",
+    .minimum_zig_version = "0.16.0",
+    .paths = .{""},
+    .fingerprint = 0x52d7c460444b7db6,
+}
