@@ -12,7 +12,7 @@ const stbi = @cImport({
     @cInclude("stb_image.h");
 });
 
-const logo_image_bytes = @embedFile("logo.jpg");
+const logo_image_bytes = @embedFile("dvd-logo.png");
 
 const Wayland = struct {
     display: ?*c.wl_display = null,
@@ -46,12 +46,14 @@ const Wayland = struct {
 };
 
 const Renderer = struct {
-    fn drawLogo(pixels: []u32, width: u32, logo: *Image, x_off: u32, y_off: u32) void {
+    fn drawLogo(pixels: []u32, _: u32, logo: *Image, x_off: u32, y_off: u32, stride: usize) void {
         for (0..logo.pixels.len / logo.width) |y| {
             for (0..logo.width) |x| {
-                const fb_i = (y + y_off) * width + (x + x_off);
+                const row_stride = stride / 4;
+                const fb_i = (y + y_off) * row_stride + (x + x_off);
                 const logo_i = y * logo.width + x;
-                pixels[fb_i] = logo.pixels[logo_i];
+                const src = logo.pixels[logo_i];
+                pixels[fb_i] = src;
             }
         }
     }
@@ -105,7 +107,7 @@ const App = struct {
     pub fn render(self: *App) !void {
         const fb = self.platform.buffer.?.pixels;
         Renderer.clear(fb, 0x00000000);
-        Renderer.drawLogo(fb, self.width, &self.logo, self.state.logo_x, self.state.logo_y);
+        Renderer.drawLogo(fb, self.width, &self.logo, self.state.logo_x, self.state.logo_y, self.platform.buffer.?.stride);
     }
 
     fn addListeners(self: *App) !void {
@@ -153,6 +155,7 @@ const Buffer = struct {
     pool: *c.struct_wl_shm_pool,
     data: []align(std.heap.page_size_min) u8,
     pixels: []u32,
+    stride: usize,
 
     fn init(width: u32, height: u32, shm: *c.wl_shm) !Buffer {
         const stride: usize = width * 4;
@@ -192,13 +195,96 @@ const Buffer = struct {
             c.WL_SHM_FORMAT_ARGB8888,
         ) orelse return error.CreateBuffer;
 
-        return .{ .buffer = buffer, .pool = pool, .data = data, .pixels = pixels };
+        return .{ .buffer = buffer, .pool = pool, .data = data, .pixels = pixels, .stride = stride };
     }
 
     fn deinit(self: *Buffer) void {
         c.wl_buffer_destroy(self.buffer);
         c.wl_shm_pool_destroy(self.pool);
         posix.munmap(self.data);
+    }
+};
+
+const Image = struct {
+    alloc: Allocator,
+    width: u32,
+    height: u32,
+    channels: u32,
+    pixels: []u32,
+
+    pub fn from_bytes(alloc: Allocator, bytes: []const u8) !Image {
+        var width_c: c_int = 0;
+        var height_c: c_int = 0;
+        var channels: c_int = 0;
+
+        const pixels_c = stbi.stbi_load_from_memory(
+            bytes.ptr,
+            @intCast(bytes.len),
+            &width_c,
+            &height_c,
+            &channels,
+            4,
+        ) orelse return error.ImageLoadFailed;
+
+        const src_width: u32 = @intCast(width_c);
+        const src_height: u32 = @intCast(height_c);
+
+        const src = @as([*]u8, @ptrCast(pixels_c))[0 .. @as(usize, src_width) * src_height * 4];
+        defer stbi.stbi_image_free(pixels_c);
+
+        var min_x: u32 = src_width;
+        var min_y: u32 = src_height;
+        var max_x: u32 = 0;
+        var max_y: u32 = 0;
+        for (0..src_height) |y| {
+            for (0..src_width) |x| {
+                const a = src[(y * src_width + x) * 4 + 3];
+                if (a == 0) continue;
+                if (x < min_x) min_x = @intCast(x);
+                if (x > max_x) max_x = @intCast(x);
+                if (y < min_y) min_y = @intCast(y);
+                if (y > max_y) max_y = @intCast(y);
+            }
+        }
+        if (max_x < min_x or max_y < min_y) return error.ImageFullyTransparent;
+
+        const width = max_x - min_x + 1;
+        const height = max_y - min_y + 1;
+        const pixels = try alloc.alloc(u32, @as(usize, width) * height);
+
+        for (0..height) |y| {
+            for (0..width) |x| {
+                const base = ((y + min_y) * src_width + (x + min_x)) * 4;
+
+                const r = src[base + 0];
+                const g = src[base + 1];
+                const b = src[base + 2];
+                const a = src[base + 3];
+
+                const af = @as(f32, a) / 255.0;
+                const r2 = @as(u32, @intFromFloat(@as(f32, r) * af));
+                const g2 = @as(u32, @intFromFloat(@as(f32, g) * af));
+                const b2 = @as(u32, @intFromFloat(@as(f32, b) * af));
+
+                pixels[y * width + x] =
+                    (@as(u32, a) << 24) |
+                    (r2 << 16) |
+                    (g2 << 8) |
+                    b2;
+            }
+        }
+
+        return .{
+            .alloc = alloc,
+            .width = width,
+            .height = height,
+            .channels = @intCast(4),
+            .pixels = pixels,
+        };
+    }
+
+    pub fn deinit(self: *Image) void {
+        self.alloc.free(self.pixels);
     }
 };
 
@@ -255,6 +341,10 @@ fn layerConfigure(ctx: ?*anyopaque, layer_surface: ?*c.zwlr_layer_surface_v1, se
     c.zwlr_layer_surface_v1_ack_configure(layer_surface, serial);
 }
 
+fn bufferRelease(_: ?*anyopaque, buffer: ?*c.wl_buffer) callconv(.c) void {
+    _ = buffer;
+}
+
 const registry_listener: c.wl_registry_listener = .{
     .global = &registryGlobalHandler,
     .global_remove = &registryGlobalRemoveHandler,
@@ -264,65 +354,8 @@ const layer_listener: c.zwlr_layer_surface_v1_listener = .{
     .closed = null,
 };
 const frame_listener: c.wl_callback_listener = .{ .done = &frameDone };
-
-const Image = struct {
-    alloc: Allocator,
-    width: u32,
-    height: u32,
-    channels: u32,
-    pixels: []u32,
-
-    pub fn from_bytes(alloc: Allocator, bytes: []const u8) !Image {
-        var width_c: c_int = 0;
-        var height_c: c_int = 0;
-        var channels: c_int = 0;
-
-        const pixels_c = stbi.stbi_load_from_memory(
-            bytes.ptr,
-            @intCast(bytes.len),
-            &width_c,
-            &height_c,
-            &channels,
-            4,
-        ) orelse return error.ImageLoadFailed;
-
-        const width: u32 = @intCast(width_c);
-        const height: u32 = @intCast(height_c);
-        const pixel_count: usize = width * height;
-
-        const pixels = try alloc.alloc(u32, pixel_count);
-
-        const src = @as([*]u8, @ptrCast(pixels_c))[0 .. pixel_count * 4];
-
-        for (pixels, 0..) |*dst, i| {
-            const base = i * 4;
-
-            const r = src[base + 0];
-            const g = src[base + 1];
-            const b = src[base + 2];
-            const a = src[base + 3];
-
-            dst.* =
-                (@as(u32, a) << 24) |
-                (@as(u32, r) << 16) |
-                (@as(u32, g) << 8) |
-                @as(u32, b);
-        }
-
-        stbi.stbi_image_free(pixels_c);
-
-        return .{
-            .alloc = alloc,
-            .width = width,
-            .height = height,
-            .channels = @intCast(4),
-            .pixels = pixels,
-        };
-    }
-
-    pub fn deinit(self: *Image) void {
-        self.alloc.free(self.pixels);
-    }
+const buffer_listener: c.wl_buffer_listener = .{
+    .release = &bufferRelease,
 };
 
 pub fn main(init: std.process.Init) !void {
