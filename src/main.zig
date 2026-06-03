@@ -76,17 +76,11 @@ const Wayland = struct {
         self.alloc.destroy(self);
     }
 
-    pub fn present(self: *Wayland, buf: *Buffer) void {
+    pub fn present(self: *Wayland, buf: *Buffer, x: i32, y: i32, w: i32, h: i32) void {
         c.wl_surface_attach(self.surface, buf.buffer, 0, 0);
         buf.busy = true;
 
-        c.wl_surface_damage(
-            self.surface,
-            0,
-            0,
-            @intCast(self.width),
-            @intCast(self.height),
-        );
+        c.wl_surface_damage_buffer(self.surface, x, y, w, h);
         c.wl_surface_commit(self.surface);
     }
 
@@ -169,7 +163,7 @@ const Wayland = struct {
 
         if (registry) |r| {
             if (std.mem.eql(u8, interface, "wl_compositor")) {
-                globals.compositor = @ptrCast(c.wl_registry_bind(r, name, &c.wl_compositor_interface, 3));
+                globals.compositor = @ptrCast(c.wl_registry_bind(r, name, &c.wl_compositor_interface, 4));
             } else if (std.mem.eql(u8, interface, "wl_shm")) {
                 globals.shm = @ptrCast(c.wl_registry_bind(r, name, &c.wl_shm_interface, 1));
             } else if (std.mem.eql(u8, interface, "zwlr_layer_shell_v1")) {
@@ -235,8 +229,10 @@ const State = struct {
             aqua = 0x00FFFF,
         };
         x: i32 = 0,
+        prev_x: i32 = 0,
         dx: i32 = 3,
         y: i32 = 0,
+        prev_y: i32 = 0,
         dy: i32 = 3,
         colour: Colour = Colour.red,
     };
@@ -327,17 +323,19 @@ const App = struct {
     }
 
     pub fn update(self: *App) !void {
+        self.state.logo.prev_x = self.state.logo.x;
+        self.state.logo.prev_y = self.state.logo.y;
+
         const max_x = @as(i32, @intCast(self.platform.width)) - @as(i32, @intCast(self.logo.width));
         const max_y = @as(i32, @intCast(self.platform.height)) - @as(i32, @intCast(self.logo.height));
 
         const next_x = self.state.logo.x + self.state.logo.dx;
+        const next_y = self.state.logo.y + self.state.logo.dy;
 
         if (next_x > max_x or next_x < 0) {
             self.state.logo.dx *= -1;
             self.state.logo.colour = self.state.logo.colour.next();
         } else self.state.logo.x = next_x;
-
-        const next_y = self.state.logo.y + self.state.logo.dy;
 
         if (next_y > max_y or next_y < 0) {
             self.state.logo.dy *= -1;
@@ -346,7 +344,13 @@ const App = struct {
     }
 
     pub fn present(self: *App, buf: *Buffer) !void {
-        self.platform.present(buf);
+        const x = @min(self.state.logo.x, self.state.logo.prev_x);
+        const w: i32 = @intCast(@abs(self.state.logo.x - self.state.logo.prev_x) + self.logo.width);
+
+        const y = @min(self.state.logo.y, self.state.logo.prev_y);
+        const h: i32 = @intCast(@abs(self.state.logo.y - self.state.logo.prev_y) + self.logo.height);
+
+        self.platform.present(buf, x, y, w, h);
     }
 
     pub fn render(self: *App, buf: *Buffer) !void {
