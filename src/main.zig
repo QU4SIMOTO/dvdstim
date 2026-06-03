@@ -1,15 +1,10 @@
 const std = @import("std");
+const c = @import("c");
+const Image = @import("image.zig");
+
 const posix = std.posix;
 const linux = std.os.linux;
 const Allocator = std.mem.Allocator;
-
-const Image = @import("image.zig");
-
-const c = @cImport({
-    @cInclude("wayland-client.h");
-    @cInclude("xdg-shell-client-protocol.h");
-    @cInclude("wlr-layer-shell-unstable-v1-client-protocol.h");
-});
 
 const logo_image_bytes = @embedFile("dvd-logo.png");
 

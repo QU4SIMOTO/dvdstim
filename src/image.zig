@@ -1,9 +1,7 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
+const c = @import("c");
 
-const stbi = @cImport({
-    @cInclude("stb_image.h");
-});
+const Allocator = std.mem.Allocator;
 
 const Self = @This();
 
@@ -18,7 +16,7 @@ pub fn fromBytes(alloc: Allocator, bytes: []const u8, scale: u32) !Self {
     var height_c: c_int = 0;
     var channels: c_int = 0;
 
-    const pixels_c = stbi.stbi_load_from_memory(
+    const pixels_c = c.stbi_load_from_memory(
         bytes.ptr,
         @intCast(bytes.len),
         &width_c,
@@ -31,7 +29,7 @@ pub fn fromBytes(alloc: Allocator, bytes: []const u8, scale: u32) !Self {
     const src_height: u32 = @intCast(height_c);
 
     const src = @as([*]u8, @ptrCast(pixels_c))[0 .. @as(usize, src_width) * src_height * 4];
-    defer stbi.stbi_image_free(pixels_c);
+    defer c.stbi_image_free(pixels_c);
 
     var min_x: u32 = src_width;
     var min_y: u32 = src_height;
