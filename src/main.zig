@@ -34,7 +34,7 @@ const Wayland = struct {
     globals: Globals,
     surface: ?*c.wl_surface = null,
     layer_surface: ?*c.struct_zwlr_layer_surface_v1 = null,
-    buffer: ?Buffer = null,
+    buffers: [2]Buffer = undefined,
     configured: bool = false,
 
     pub fn init(alloc: Allocator) !*Wayland {
@@ -68,7 +68,7 @@ const Wayland = struct {
     }
 
     pub fn deinit(self: *Wayland) void {
-        if (self.buffer) |*b| b.deinit();
+        for (&self.buffers) |*b| b.deinit();
         if (self.layer_surface) |l| c.zwlr_layer_surface_v1_destroy(l);
         if (self.surface) |s| c.wl_surface_destroy(s);
         c.wl_registry_destroy(self.registry);
@@ -76,11 +76,9 @@ const Wayland = struct {
         self.alloc.destroy(self);
     }
 
-    pub fn present(
-        self: *Wayland,
-    ) void {
-        c.wl_surface_attach(self.surface, self.buffer.?.buffer, 0, 0);
-        self.buffer.?.busy = true;
+    pub fn present(self: *Wayland, buf: *Buffer) void {
+        c.wl_surface_attach(self.surface, buf.buffer, 0, 0);
+        buf.busy = true;
 
         c.wl_surface_damage(
             self.surface,
@@ -92,14 +90,22 @@ const Wayland = struct {
         c.wl_surface_commit(self.surface);
     }
 
-    pub fn frameBuffer(self: *Wayland) FrameBuffer {
-        const buffer = self.buffer.?;
+    pub fn frameBuffer(self: *Wayland, buf: *Buffer) FrameBuffer {
         return .{
             .width = self.width,
             .height = self.height,
-            .stride = buffer.stride,
-            .pixels = buffer.pixels,
+            .stride = buf.stride,
+            .pixels = buf.pixels,
         };
+    }
+
+    pub fn commit(self: *Wayland) void {
+        c.wl_surface_commit(self.surface);
+    }
+
+    pub fn getFreeBuffer(self: *Wayland) ?*Buffer {
+        for (&self.buffers) |*b| if (!b.busy) return b;
+        return null;
     }
 
     fn bindGlobals(self: *Wayland) !void {
@@ -138,10 +144,13 @@ const Wayland = struct {
     }
 
     fn createBuffers(self: *Wayland) !void {
-        self.buffer = try Buffer.init(self.width, self.height, self.globals.shm.?);
-        errdefer self.buffer.?.deinit();
+        self.buffers[0] = try Buffer.init(self.width, self.height, self.globals.shm.?);
+        errdefer self.buffers[0].deinit();
+        if (c.wl_buffer_add_listener(self.buffers[0].buffer, &Buffer.buffer_listener, &self.buffers[0]) != 0) return error.AddBufferListener;
 
-        if (c.wl_buffer_add_listener(self.buffer.?.buffer, &Buffer.buffer_listener, &self.buffer.?) != 0) return error.AddBufferListener;
+        self.buffers[1] = try Buffer.init(self.width, self.height, self.globals.shm.?);
+        errdefer self.buffers[1].deinit();
+        if (c.wl_buffer_add_listener(self.buffers[1].buffer, &Buffer.buffer_listener, &self.buffers[1]) != 0) return error.AddBufferListener;
     }
 
     fn layerConfigure(ctx: ?*anyopaque, layer_surface: ?*c.zwlr_layer_surface_v1, serial: u32, w: u32, h: u32) callconv(.c) void {
@@ -336,12 +345,12 @@ const App = struct {
         } else self.state.logo.y = next_y;
     }
 
-    pub fn present(self: *App) !void {
-        self.platform.present();
+    pub fn present(self: *App, buf: *Buffer) !void {
+        self.platform.present(buf);
     }
 
-    pub fn render(self: *App) !void {
-        const fb = self.platform.frameBuffer();
+    pub fn render(self: *App, buf: *Buffer) !void {
+        const fb = self.platform.frameBuffer(buf);
         Renderer.clear(fb.pixels, self.state.clear_colour);
         Renderer.drawLogo(fb, &self.logo, @intCast(self.state.logo.x), @intCast(self.state.logo.y), @intFromEnum(self.state.logo.colour));
     }
@@ -355,19 +364,21 @@ const App = struct {
             std.log.err("Adding frame listener callback", .{});
         }
 
-        if (!app.platform.buffer.?.busy) {
+        if (app.platform.getFreeBuffer()) |buf| {
             app.update() catch |e| {
                 std.log.err("Update error {any}", .{e});
             };
 
-            app.render() catch |e| {
+            app.render(buf) catch |e| {
                 std.log.err("Render error {any}", .{e});
             };
-        }
 
-        app.present() catch |e| {
-            std.log.err("Present error {any}", .{e});
-        };
+            app.present(buf) catch |e| {
+                std.log.err("Present error {any}", .{e});
+            };
+        } else {
+            app.platform.commit();
+        }
     }
 };
 
@@ -381,11 +392,14 @@ pub fn main(init: std.process.Init) !void {
     defer app.deinit();
 
     try app.update();
-    try app.render();
+    if (app.platform.getFreeBuffer()) |buf| {
+        try app.render(buf);
 
-    const cb = c.wl_surface_frame(app.platform.surface);
-    _ = c.wl_callback_add_listener(cb, &App.frame_listener, &app);
-    try app.present();
+        const cb = c.wl_surface_frame(app.platform.surface);
+        _ = c.wl_callback_add_listener(cb, &App.frame_listener, &app);
+
+        try app.present(buf);
+    }
 
     while (c.wl_display_dispatch(app.platform.display) != -1) {}
 }
