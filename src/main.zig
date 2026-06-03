@@ -3,13 +3,12 @@ const posix = std.posix;
 const linux = std.os.linux;
 const Allocator = std.mem.Allocator;
 
+const Image = @import("image.zig");
+
 const c = @cImport({
     @cInclude("wayland-client.h");
     @cInclude("xdg-shell-client-protocol.h");
     @cInclude("wlr-layer-shell-unstable-v1-client-protocol.h");
-});
-const stbi = @cImport({
-    @cInclude("stb_image.h");
 });
 
 const logo_image_bytes = @embedFile("dvd-logo.png");
@@ -377,99 +376,10 @@ const App = struct {
     }
 };
 
-const Image = struct {
-    alloc: Allocator,
-    width: u32,
-    height: u32,
-    channels: u32,
-    pixels: []u32,
-
-    pub fn from_bytes(alloc: Allocator, bytes: []const u8, scale: u32) !Image {
-        var width_c: c_int = 0;
-        var height_c: c_int = 0;
-        var channels: c_int = 0;
-
-        const pixels_c = stbi.stbi_load_from_memory(
-            bytes.ptr,
-            @intCast(bytes.len),
-            &width_c,
-            &height_c,
-            &channels,
-            4,
-        ) orelse return error.ImageLoadFailed;
-
-        const src_width: u32 = @intCast(width_c);
-        const src_height: u32 = @intCast(height_c);
-
-        const src = @as([*]u8, @ptrCast(pixels_c))[0 .. @as(usize, src_width) * src_height * 4];
-        defer stbi.stbi_image_free(pixels_c);
-
-        var min_x: u32 = src_width;
-        var min_y: u32 = src_height;
-        var max_x: u32 = 0;
-        var max_y: u32 = 0;
-        for (0..src_height) |y| {
-            for (0..src_width) |x| {
-                const a = src[(y * src_width + x) * 4 + 3];
-                if (a == 0) continue;
-                if (x < min_x) min_x = @intCast(x);
-                if (x > max_x) max_x = @intCast(x);
-                if (y < min_y) min_y = @intCast(y);
-                if (y > max_y) max_y = @intCast(y);
-            }
-        }
-        if (max_x < min_x or max_y < min_y) return error.ImageTransparent;
-
-        const crop_w = max_x - min_x + 1;
-        const crop_h = max_y - min_y + 1;
-
-        const div = if (scale == 0) 1 else scale;
-        const width = @max(crop_w / div, 1);
-        const height = @max(crop_h / div, 1);
-        const pixels = try alloc.alloc(u32, @as(usize, width) * height);
-
-        for (0..height) |y| {
-            for (0..width) |x| {
-                const sx = min_x + @as(u32, @intCast(x)) * div;
-                const sy = min_y + @as(u32, @intCast(y)) * div;
-                const base = (sy * src_width + sx) * 4;
-
-                const r = src[base + 0];
-                const g = src[base + 1];
-                const b = src[base + 2];
-                const a = src[base + 3];
-
-                const af = @as(f32, a) / 255.0;
-                const r2 = @as(u32, @intFromFloat(@as(f32, r) * af));
-                const g2 = @as(u32, @intFromFloat(@as(f32, g) * af));
-                const b2 = @as(u32, @intFromFloat(@as(f32, b) * af));
-
-                pixels[y * width + x] =
-                    (@as(u32, a) << 24) |
-                    (r2 << 16) |
-                    (g2 << 8) |
-                    b2;
-            }
-        }
-
-        return .{
-            .alloc = alloc,
-            .width = width,
-            .height = height,
-            .channels = @intCast(4),
-            .pixels = pixels,
-        };
-    }
-
-    pub fn deinit(self: *Image) void {
-        self.alloc.free(self.pixels);
-    }
-};
-
 pub fn main(init: std.process.Init) !void {
     const alloc = init.gpa;
 
-    var logo = try Image.from_bytes(alloc, logo_image_bytes[0..logo_image_bytes.len :0], 8);
+    var logo = try Image.fromBytes(alloc, logo_image_bytes[0..logo_image_bytes.len :0], 8);
     defer logo.deinit();
 
     var app = try App.init(alloc, logo);
