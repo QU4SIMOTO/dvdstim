@@ -208,6 +208,8 @@ const Renderer = struct {
     }
 };
 
+const Vec2 = @Vector(2, i32);
+
 const State = struct {
     const Logo = struct {
         const Colour = enum(u32) {
@@ -228,12 +230,9 @@ const State = struct {
             magenta = 0xFF00FF,
             aqua = 0x00FFFF,
         };
-        x: i32 = 0,
-        prev_x: i32 = 0,
-        dx: i32 = 3,
-        y: i32 = 0,
-        prev_y: i32 = 0,
-        dy: i32 = 3,
+        pos: Vec2 = .{ 0, 0 },
+        pre: Vec2 = .{ 0, 0 },
+        vel: Vec2 = .{ 3, 3 },
         colour: Colour = Colour.red,
     };
     logo: Logo = .{},
@@ -323,40 +322,36 @@ const App = struct {
     }
 
     pub fn update(self: *App) !void {
-        self.state.logo.prev_x = self.state.logo.x;
-        self.state.logo.prev_y = self.state.logo.y;
+        self.state.logo.pre = self.state.logo.pos;
 
         const max_x = @as(i32, @intCast(self.platform.width)) - @as(i32, @intCast(self.logo.width));
         const max_y = @as(i32, @intCast(self.platform.height)) - @as(i32, @intCast(self.logo.height));
 
-        const next_x = self.state.logo.x + self.state.logo.dx;
-        const next_y = self.state.logo.y + self.state.logo.dy;
+        const next = self.state.logo.pos + self.state.logo.vel;
 
-        if (next_x > max_x or next_x < 0) {
-            self.state.logo.dx *= -1;
+        if (next[0] > max_x or next[0] < 0) {
+            self.state.logo.vel[0] *= -1;
             self.state.logo.colour = self.state.logo.colour.next();
-        } else self.state.logo.x = next_x;
+        } else self.state.logo.pos[0] = next[0];
 
-        if (next_y > max_y or next_y < 0) {
-            self.state.logo.dy *= -1;
+        if (next[1] > max_y or next[1] < 0) {
+            self.state.logo.vel[1] *= -1;
             self.state.logo.colour = self.state.logo.colour.next();
-        } else self.state.logo.y = next_y;
+        } else self.state.logo.pos[1] = next[1];
     }
 
     pub fn present(self: *App, buf: *Buffer) !void {
-        const x = @min(self.state.logo.x, self.state.logo.prev_x);
-        const w: i32 = @intCast(@abs(self.state.logo.x - self.state.logo.prev_x) + self.logo.width);
+        const lo = @min(self.state.logo.pos, self.state.logo.pre);
+        const dims: @Vector(2, u32) = .{ self.logo.width, self.logo.height };
+        const size: Vec2 = @intCast(@abs(self.state.logo.pos - self.state.logo.pre) + dims);
 
-        const y = @min(self.state.logo.y, self.state.logo.prev_y);
-        const h: i32 = @intCast(@abs(self.state.logo.y - self.state.logo.prev_y) + self.logo.height);
-
-        self.platform.present(buf, x, y, w, h);
+        self.platform.present(buf, lo[0], lo[1], size[0], size[1]);
     }
 
     pub fn render(self: *App, buf: *Buffer) !void {
         const fb = self.platform.frameBuffer(buf);
         Renderer.clear(fb.pixels, self.state.clear_colour);
-        Renderer.drawLogo(fb, &self.logo, @intCast(self.state.logo.x), @intCast(self.state.logo.y), @intFromEnum(self.state.logo.colour));
+        Renderer.drawLogo(fb, &self.logo, @intCast(self.state.logo.pos[0]), @intCast(self.state.logo.pos[1]), @intFromEnum(self.state.logo.colour));
     }
 
     fn frameDone(ctx: ?*anyopaque, cb: ?*c.wl_callback, _: u32) callconv(.c) void {
