@@ -14,6 +14,37 @@ const stbi = @cImport({
 
 const logo_image_bytes = @embedFile("logo.jpg");
 
+const Wayland = struct {
+    display: ?*c.wl_display = null,
+    registry: ?*c.struct_wl_registry = null,
+    compositor: ?*c.wl_compositor = null,
+    surface: ?*c.wl_surface = null,
+    shm: ?*c.wl_shm = null,
+    layer_shell: ?*c.zwlr_layer_shell_v1 = null,
+    layer_surface: ?*c.struct_zwlr_layer_surface_v1 = null,
+    buffer: ?Buffer = null,
+
+    pub fn deinit(self: *Wayland) void {
+        if (self.buffer) |*b| b.deinit();
+        c.zwlr_layer_surface_v1_destroy(self.layer_surface);
+        c.wl_surface_destroy(self.surface);
+        c.wl_registry_destroy(self.registry);
+        c.wl_display_disconnect(self.display);
+    }
+
+    pub fn present(self: *Wayland, width: u32, height: u32) void {
+        c.wl_surface_attach(self.surface, self.buffer.?.buffer, 0, 0);
+        c.wl_surface_damage(
+            self.surface,
+            0,
+            0,
+            @intCast(width),
+            @intCast(height),
+        );
+        c.wl_surface_commit(self.surface);
+    }
+};
+
 const Renderer = struct {
     fn drawLogo(pixels: []u32, width: u32, logo: *Image, x_off: u32, y_off: u32) void {
         for (0..logo.pixels.len / logo.width) |y| {
@@ -30,37 +61,31 @@ const Renderer = struct {
     }
 };
 
+const State = struct {
+    logo_x: u32 = 0,
+    logo_y: u32 = 0,
+};
+
 const App = struct {
     width: u32 = 0,
     height: u32 = 0,
     logo: Image,
     configured: bool = false,
-    display: *c.struct_wl_display,
-    registry: ?*c.struct_wl_registry,
-    compositor: ?*c.wl_compositor = null,
-    shm: ?*c.wl_shm = null,
-    layer_shell: ?*c.zwlr_layer_shell_v1 = null,
-    surface: ?*c.struct_wl_surface = null,
-    layer_surface: ?*c.struct_zwlr_layer_surface_v1 = null,
-    buffer: ?Buffer = null,
-    logo_x: u32 = 0,
-    logo_y: u32 = 0,
+    platform: Wayland,
+    state: State,
 
     pub fn init(logo: Image) !App {
-        const display = c.wl_display_connect(null) orelse return error.DisplayConnect;
-        errdefer c.wl_display_disconnect(display);
+        var platform: Wayland = .{};
+        platform.display = c.wl_display_connect(null) orelse return error.DisplayConnect;
+        errdefer c.wl_display_disconnect(platform.display);
 
-        const registry = c.wl_display_get_registry(display) orelse return error.RegistryConnect;
+        platform.registry = c.wl_display_get_registry(platform.display) orelse return error.RegistryConnect;
 
-        return .{ .logo = logo, .display = display, .registry = registry };
+        return .{ .logo = logo, .platform = platform, .state = .{} };
     }
 
     pub fn deinit(self: *App) void {
-        if (self.buffer) |*b| b.deinit();
-        c.zwlr_layer_surface_v1_destroy(self.layer_surface);
-        c.wl_surface_destroy(self.surface);
-        c.wl_registry_destroy(self.registry);
-        c.wl_display_disconnect(self.display);
+        self.platform.deinit();
     }
 
     pub fn setup(self: *App) !void {
@@ -70,64 +95,56 @@ const App = struct {
     }
 
     pub fn update(self: *App) !void {
-        self.logo_x += 5;
-    }
-
-    pub fn render(self: *App) !void {
-        const fb = self.buffer.?.pixels;
-        Renderer.clear(fb, 0x00000000);
-        Renderer.drawLogo(fb, self.width, &self.logo, self.logo_x, self.logo_y);
+        self.state.logo_x += 5;
     }
 
     pub fn present(self: *App) !void {
-        c.wl_surface_attach(self.surface, self.buffer.?.buffer, 0, 0);
-        c.wl_surface_damage(
-            self.surface,
-            0,
-            0,
-            @intCast(self.width),
-            @intCast(self.height),
-        );
-        c.wl_surface_commit(self.surface);
+        self.platform.present(self.width, self.height);
+    }
+
+    pub fn render(self: *App) !void {
+        const fb = self.platform.buffer.?.pixels;
+        Renderer.clear(fb, 0x00000000);
+        Renderer.drawLogo(fb, self.width, &self.logo, self.state.logo_x, self.state.logo_y);
     }
 
     fn addListeners(self: *App) !void {
-        if (c.wl_registry_add_listener(self.registry, &registry_listener, self) != 0) return error.RegistryListener;
-        if (c.wl_display_roundtrip(self.display) == -1) return error.DisplayRoundTrip;
-        if (self.compositor == null or self.shm == null or self.layer_shell == null) {
+        if (c.wl_registry_add_listener(self.platform.registry, &registry_listener, self) != 0) return error.RegistryListener;
+        if (c.wl_display_roundtrip(self.platform.display) == -1) return error.DisplayRoundTrip;
+        if (self.platform.compositor == null or self.platform.shm == null or self.platform.layer_shell == null) {
             return error.Globals;
         }
     }
 
     fn configure(self: *App) !void {
-        self.surface = c.wl_compositor_create_surface(self.compositor);
+        self.platform.surface = c.wl_compositor_create_surface(self.platform.compositor);
 
-        self.layer_surface =
-            c.zwlr_layer_shell_v1_get_layer_surface(self.layer_shell, self.surface, null, c.ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, "dvd-logo");
+        self.platform.layer_surface =
+            c.zwlr_layer_shell_v1_get_layer_surface(self.platform.layer_shell, self.platform.surface, null, c.ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, "dvd-logo");
 
-        if (c.zwlr_layer_surface_v1_add_listener(self.layer_surface, &layer_listener, self) != 0) return error.AddSurfaceListener;
+        if (c.zwlr_layer_surface_v1_add_listener(self.platform.layer_surface, &layer_listener, self) != 0) return error.AddSurfaceListener;
 
-        c.zwlr_layer_surface_v1_set_anchor(self.layer_surface, c.ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
+        c.zwlr_layer_surface_v1_set_anchor(self.platform.layer_surface, c.ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
             c.ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM |
             c.ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
             c.ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT);
 
-        c.zwlr_layer_surface_v1_set_size(self.layer_surface, 0, 0);
+        c.zwlr_layer_surface_v1_set_size(self.platform.layer_surface, 0, 0);
 
         const region =
-            c.wl_compositor_create_region(self.compositor);
+            c.wl_compositor_create_region(self.platform.compositor);
 
-        c.wl_surface_set_input_region(self.surface, region);
+        c.wl_surface_set_input_region(self.platform.surface, region);
         c.wl_region_destroy(region);
-        c.wl_surface_commit(self.surface);
+        c.wl_surface_commit(self.platform.surface);
 
         while (!self.configured) {
-            if (c.wl_display_dispatch(self.display) == -1) return error.DisplayDispatch;
+            if (c.wl_display_dispatch(self.platform.display) == -1) return error.DisplayDispatch;
         }
     }
 
     fn createBuffers(self: *App) !void {
-        self.buffer = try Buffer.init(self.width, self.height, self.shm.?);
+        self.platform.buffer = try Buffer.init(self.width, self.height, self.platform.shm.?);
     }
 };
 
@@ -192,11 +209,11 @@ fn registryGlobalHandler(ctx: ?*anyopaque, registry: ?*c.wl_registry, name: u32,
 
     if (registry) |r| {
         if (std.mem.eql(u8, interface, "wl_compositor")) {
-            app.compositor = @ptrCast(c.wl_registry_bind(r, name, &c.wl_compositor_interface, 3));
+            app.platform.compositor = @ptrCast(c.wl_registry_bind(r, name, &c.wl_compositor_interface, 3));
         } else if (std.mem.eql(u8, interface, "wl_shm")) {
-            app.shm = @ptrCast(c.wl_registry_bind(r, name, &c.wl_shm_interface, 1));
+            app.platform.shm = @ptrCast(c.wl_registry_bind(r, name, &c.wl_shm_interface, 1));
         } else if (std.mem.eql(u8, interface, "zwlr_layer_shell_v1")) {
-            app.layer_shell = @ptrCast(c.wl_registry_bind(r, name, &c.zwlr_layer_shell_v1_interface, 1));
+            app.platform.layer_shell = @ptrCast(c.wl_registry_bind(r, name, &c.zwlr_layer_shell_v1_interface, 1));
         }
     } else {
         std.log.err("Invalid registry", .{});
@@ -219,7 +236,7 @@ fn frameDone(ctx: ?*anyopaque, cb: ?*c.wl_callback, _: u32) callconv(.c) void {
         std.log.err("Render error {any}", .{e});
     };
 
-    const next = c.wl_surface_frame(app.surface);
+    const next = c.wl_surface_frame(app.platform.surface);
     if (c.wl_callback_add_listener(next, &frame_listener, app) != 0) {
         std.log.err("adding frame listener callback", .{});
     }
@@ -321,9 +338,9 @@ pub fn main(init: std.process.Init) !void {
     try app.update();
     try app.render();
 
-    const cb = c.wl_surface_frame(app.surface);
+    const cb = c.wl_surface_frame(app.platform.surface);
     _ = c.wl_callback_add_listener(cb, &frame_listener, &app);
     try app.present();
 
-    while (c.wl_display_dispatch(app.display) != -1) {}
+    while (c.wl_display_dispatch(app.platform.display) != -1) {}
 }
