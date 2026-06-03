@@ -46,14 +46,25 @@ const Wayland = struct {
 };
 
 const Renderer = struct {
-    fn drawLogo(pixels: []u32, _: u32, logo: *Image, x_off: u32, y_off: u32, stride: usize) void {
+    fn drawLogo(pixels: []u32, _: u32, logo: *Image, x_off: u32, y_off: u32, stride: usize, tint: u32) void {
+        const tr = (tint >> 16) & 0xFF;
+        const tg = (tint >> 8) & 0xFF;
+        const tb = tint & 0xFF;
+
         for (0..logo.pixels.len / logo.width) |y| {
             for (0..logo.width) |x| {
                 const row_stride = stride / 4;
                 const fb_i = (y + y_off) * row_stride + (x + x_off);
                 const logo_i = y * logo.width + x;
-                const src = logo.pixels[logo_i];
-                pixels[fb_i] = src;
+
+                const a = logo.pixels[logo_i] >> 24;
+                const af = @as(f32, @floatFromInt(a)) / 255.0;
+
+                const r = @as(u32, @intFromFloat(@as(f32, @floatFromInt(tr)) * af));
+                const g = @as(u32, @intFromFloat(@as(f32, @floatFromInt(tg)) * af));
+                const b = @as(u32, @intFromFloat(@as(f32, @floatFromInt(tb)) * af));
+
+                pixels[fb_i] = (a << 24) | (r << 16) | (g << 8) | b;
             }
         }
     }
@@ -64,8 +75,15 @@ const Renderer = struct {
 };
 
 const State = struct {
-    logo_x: u32 = 0,
-    logo_y: u32 = 0,
+    const Logo = struct {
+        x: i32 = 0,
+        dx: i32 = 5,
+        y: i32 = 0,
+        dy: i32 = 0,
+        colour: u32 = 0xFF0000,
+    };
+    logo: Logo = .{},
+    clear_colour: u32 = 0x00000000,
 };
 
 const App = struct {
@@ -97,7 +115,21 @@ const App = struct {
     }
 
     pub fn update(self: *App) !void {
-        self.state.logo_x += 5;
+        self.state.logo.x += self.state.logo.dx;
+        self.state.logo.y += self.state.logo.dy;
+
+        const max_x = @as(i32, @intCast(self.width)) - @as(i32, @intCast(self.logo.width));
+
+        if (self.state.logo.x > max_x) {
+            self.state.logo.x = max_x;
+            self.state.logo.dx *= -1;
+            self.state.logo.colour = 0x00FF00;
+        }
+        if (self.state.logo.x < 0) {
+            self.state.logo.x = 0;
+            self.state.logo.dx *= -1;
+            self.state.logo.colour = 0xFF0000;
+        }
     }
 
     pub fn present(self: *App) !void {
@@ -106,8 +138,8 @@ const App = struct {
 
     pub fn render(self: *App) !void {
         const fb = self.platform.buffer.?.pixels;
-        Renderer.clear(fb, 0x00000000);
-        Renderer.drawLogo(fb, self.width, &self.logo, self.state.logo_x, self.state.logo_y, self.platform.buffer.?.stride);
+        Renderer.clear(fb, self.state.clear_colour);
+        Renderer.drawLogo(fb, self.width, &self.logo, @intCast(self.state.logo.x), @intCast(self.state.logo.y), self.platform.buffer.?.stride, self.state.logo.colour);
     }
 
     fn addListeners(self: *App) !void {
@@ -212,7 +244,7 @@ const Image = struct {
     channels: u32,
     pixels: []u32,
 
-    pub fn from_bytes(alloc: Allocator, bytes: []const u8) !Image {
+    pub fn from_bytes(alloc: Allocator, bytes: []const u8, scale: u32) !Image {
         var width_c: c_int = 0;
         var height_c: c_int = 0;
         var channels: c_int = 0;
@@ -246,15 +278,21 @@ const Image = struct {
                 if (y > max_y) max_y = @intCast(y);
             }
         }
-        if (max_x < min_x or max_y < min_y) return error.ImageFullyTransparent;
+        if (max_x < min_x or max_y < min_y) return error.ImageTransparent;
 
-        const width = max_x - min_x + 1;
-        const height = max_y - min_y + 1;
+        const crop_w = max_x - min_x + 1;
+        const crop_h = max_y - min_y + 1;
+
+        const div = if (scale == 0) 1 else scale;
+        const width = @max(crop_w / div, 1);
+        const height = @max(crop_h / div, 1);
         const pixels = try alloc.alloc(u32, @as(usize, width) * height);
 
         for (0..height) |y| {
             for (0..width) |x| {
-                const base = ((y + min_y) * src_width + (x + min_x)) * 4;
+                const sx = min_x + @as(u32, @intCast(x)) * div;
+                const sy = min_y + @as(u32, @intCast(y)) * div;
+                const base = (sy * src_width + sx) * 4;
 
                 const r = src[base + 0];
                 const g = src[base + 1];
@@ -361,7 +399,7 @@ const buffer_listener: c.wl_buffer_listener = .{
 pub fn main(init: std.process.Init) !void {
     const alloc = init.gpa;
 
-    var logo = try Image.from_bytes(alloc, logo_image_bytes[0..logo_image_bytes.len :0]);
+    var logo = try Image.from_bytes(alloc, logo_image_bytes[0..logo_image_bytes.len :0], 4);
     defer logo.deinit();
 
     var app = try App.init(logo);
