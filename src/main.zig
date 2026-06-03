@@ -14,46 +14,133 @@ const stbi = @cImport({
 
 const logo_image_bytes = @embedFile("dvd-logo.png");
 
+const FrameBuffer = struct { width: u32, height: u32, stride: usize, pixels: []u32 };
+
 const Wayland = struct {
-    display: ?*c.wl_display = null,
-    registry: ?*c.struct_wl_registry = null,
+    alloc: Allocator,
+    display: *c.wl_display,
+    registry: *c.struct_wl_registry,
+    width: u32 = 0,
+    height: u32 = 0,
     compositor: ?*c.wl_compositor = null,
     surface: ?*c.wl_surface = null,
     shm: ?*c.wl_shm = null,
     layer_shell: ?*c.zwlr_layer_shell_v1 = null,
     layer_surface: ?*c.struct_zwlr_layer_surface_v1 = null,
     buffer: ?Buffer = null,
+    configured: bool = false,
+
+    pub fn init(alloc: Allocator) !*Wayland {
+        const display = c.wl_display_connect(null) orelse return error.DisplayConnect;
+        errdefer c.wl_display_disconnect(display);
+
+        const registry = c.wl_display_get_registry(display) orelse return error.RegistryConnect;
+        errdefer c.wl_registry_destroy(registry);
+
+        const wayland = try alloc.create(Wayland);
+        errdefer alloc.destroy(wayland);
+
+        wayland.* = .{
+            .alloc = alloc,
+            .display = display,
+            .registry = registry,
+        };
+
+        try wayland.bindGlobals();
+
+        try wayland.createSurface();
+        errdefer {
+            if (wayland.layer_surface) |l| c.zwlr_layer_surface_v1_destroy(l);
+            if (wayland.surface) |s| c.wl_surface_destroy(s);
+        }
+
+        try wayland.createBuffers();
+
+        return wayland;
+    }
 
     pub fn deinit(self: *Wayland) void {
         if (self.buffer) |*b| b.deinit();
-        c.zwlr_layer_surface_v1_destroy(self.layer_surface);
-        c.wl_surface_destroy(self.surface);
+        if (self.layer_surface) |l| c.zwlr_layer_surface_v1_destroy(l);
+        if (self.surface) |s| c.wl_surface_destroy(s);
         c.wl_registry_destroy(self.registry);
         c.wl_display_disconnect(self.display);
+        self.alloc.destroy(self);
     }
 
-    pub fn present(self: *Wayland, width: u32, height: u32) void {
+    pub fn present(
+        self: *Wayland,
+    ) void {
         c.wl_surface_attach(self.surface, self.buffer.?.buffer, 0, 0);
         c.wl_surface_damage(
             self.surface,
             0,
             0,
-            @intCast(width),
-            @intCast(height),
+            @intCast(self.width),
+            @intCast(self.height),
         );
         c.wl_surface_commit(self.surface);
+    }
+
+    pub fn frameBuffer(self: *Wayland) FrameBuffer {
+        const buffer = self.buffer.?;
+        return .{
+            .width = self.width,
+            .height = self.height,
+            .stride = buffer.stride,
+            .pixels = buffer.pixels,
+        };
+    }
+
+    fn bindGlobals(self: *Wayland) !void {
+        if (c.wl_registry_add_listener(self.registry, &registry_listener, self) != 0) return error.RegistryListener;
+        if (c.wl_display_roundtrip(self.display) == -1) return error.DisplayRoundTrip;
+        if (self.compositor == null or self.shm == null or self.layer_shell == null) {
+            return error.Globals;
+        }
+    }
+
+    fn createSurface(self: *Wayland) !void {
+        self.surface = c.wl_compositor_create_surface(self.compositor);
+
+        self.layer_surface =
+            c.zwlr_layer_shell_v1_get_layer_surface(self.layer_shell, self.surface, null, c.ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, "dvd-logo");
+
+        if (c.zwlr_layer_surface_v1_add_listener(self.layer_surface, &layer_listener, self) != 0) return error.AddSurfaceListener;
+
+        c.zwlr_layer_surface_v1_set_anchor(self.layer_surface, c.ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
+            c.ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM |
+            c.ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
+            c.ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT);
+
+        c.zwlr_layer_surface_v1_set_size(self.layer_surface, 0, 0);
+
+        const region =
+            c.wl_compositor_create_region(self.compositor);
+
+        c.wl_surface_set_input_region(self.surface, region);
+        c.wl_region_destroy(region);
+        c.wl_surface_commit(self.surface);
+
+        while (!self.configured) {
+            if (c.wl_display_dispatch(self.display) == -1) return error.DisplayDispatch;
+        }
+    }
+
+    fn createBuffers(self: *Wayland) !void {
+        self.buffer = try Buffer.init(self.width, self.height, self.shm.?);
     }
 };
 
 const Renderer = struct {
-    fn drawLogo(pixels: []u32, _: u32, logo: *Image, x_off: u32, y_off: u32, stride: usize, tint: u32) void {
+    fn drawLogo(fb: FrameBuffer, logo: *Image, x_off: u32, y_off: u32, tint: u32) void {
         const tr = (tint >> 16) & 0xFF;
         const tg = (tint >> 8) & 0xFF;
         const tb = tint & 0xFF;
 
         for (0..logo.pixels.len / logo.width) |y| {
             for (0..logo.width) |x| {
-                const row_stride = stride / 4;
+                const row_stride = fb.stride / 4;
                 const fb_i = (y + y_off) * row_stride + (x + x_off);
                 const logo_i = y * logo.width + x;
 
@@ -64,7 +151,7 @@ const Renderer = struct {
                 const g = @as(u32, @intFromFloat(@as(f32, @floatFromInt(tg)) * af));
                 const b = @as(u32, @intFromFloat(@as(f32, @floatFromInt(tb)) * af));
 
-                pixels[fb_i] = (a << 24) | (r << 16) | (g << 8) | b;
+                fb.pixels[fb_i] = (a << 24) | (r << 16) | (g << 8) | b;
             }
         }
     }
@@ -105,19 +192,12 @@ const State = struct {
 };
 
 const App = struct {
-    width: u32 = 0,
-    height: u32 = 0,
     logo: Image,
-    configured: bool = false,
-    platform: Wayland,
+    platform: *Wayland,
     state: State,
 
-    pub fn init(logo: Image) !App {
-        var platform: Wayland = .{};
-        platform.display = c.wl_display_connect(null) orelse return error.DisplayConnect;
-        errdefer c.wl_display_disconnect(platform.display);
-
-        platform.registry = c.wl_display_get_registry(platform.display) orelse return error.RegistryConnect;
+    pub fn init(alloc: Allocator, logo: Image) !App {
+        const platform = try Wayland.init(alloc);
 
         return .{ .logo = logo, .platform = platform, .state = .{} };
     }
@@ -126,15 +206,9 @@ const App = struct {
         self.platform.deinit();
     }
 
-    pub fn setup(self: *App) !void {
-        try self.addListeners();
-        try self.configure();
-        try self.createBuffers();
-    }
-
     pub fn update(self: *App) !void {
-        const max_x = @as(i32, @intCast(self.width)) - @as(i32, @intCast(self.logo.width));
-        const max_y = @as(i32, @intCast(self.height)) - @as(i32, @intCast(self.logo.height));
+        const max_x = @as(i32, @intCast(self.platform.width)) - @as(i32, @intCast(self.logo.width));
+        const max_y = @as(i32, @intCast(self.platform.height)) - @as(i32, @intCast(self.logo.height));
 
         const next_x = self.state.logo.x + self.state.logo.dx;
 
@@ -152,52 +226,13 @@ const App = struct {
     }
 
     pub fn present(self: *App) !void {
-        self.platform.present(self.width, self.height);
+        self.platform.present();
     }
 
     pub fn render(self: *App) !void {
-        const fb = self.platform.buffer.?.pixels;
-        Renderer.clear(fb, self.state.clear_colour);
-        Renderer.drawLogo(fb, self.width, &self.logo, @intCast(self.state.logo.x), @intCast(self.state.logo.y), self.platform.buffer.?.stride, @intFromEnum(self.state.logo.colour));
-    }
-
-    fn addListeners(self: *App) !void {
-        if (c.wl_registry_add_listener(self.platform.registry, &registry_listener, self) != 0) return error.RegistryListener;
-        if (c.wl_display_roundtrip(self.platform.display) == -1) return error.DisplayRoundTrip;
-        if (self.platform.compositor == null or self.platform.shm == null or self.platform.layer_shell == null) {
-            return error.Globals;
-        }
-    }
-
-    fn configure(self: *App) !void {
-        self.platform.surface = c.wl_compositor_create_surface(self.platform.compositor);
-
-        self.platform.layer_surface =
-            c.zwlr_layer_shell_v1_get_layer_surface(self.platform.layer_shell, self.platform.surface, null, c.ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, "dvd-logo");
-
-        if (c.zwlr_layer_surface_v1_add_listener(self.platform.layer_surface, &layer_listener, self) != 0) return error.AddSurfaceListener;
-
-        c.zwlr_layer_surface_v1_set_anchor(self.platform.layer_surface, c.ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
-            c.ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM |
-            c.ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
-            c.ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT);
-
-        c.zwlr_layer_surface_v1_set_size(self.platform.layer_surface, 0, 0);
-
-        const region =
-            c.wl_compositor_create_region(self.platform.compositor);
-
-        c.wl_surface_set_input_region(self.platform.surface, region);
-        c.wl_region_destroy(region);
-        c.wl_surface_commit(self.platform.surface);
-
-        while (!self.configured) {
-            if (c.wl_display_dispatch(self.platform.display) == -1) return error.DisplayDispatch;
-        }
-    }
-
-    fn createBuffers(self: *App) !void {
-        self.platform.buffer = try Buffer.init(self.width, self.height, self.platform.shm.?);
+        const fb = self.platform.frameBuffer();
+        Renderer.clear(fb.pixels, self.state.clear_colour);
+        Renderer.drawLogo(fb, &self.logo, @intCast(self.state.logo.x), @intCast(self.state.logo.y), @intFromEnum(self.state.logo.colour));
     }
 };
 
@@ -346,17 +381,17 @@ const Image = struct {
 };
 
 fn registryGlobalHandler(ctx: ?*anyopaque, registry: ?*c.wl_registry, name: u32, interface_c: [*c]const u8, _: u32) callconv(.c) void {
-    const app: *App = @ptrCast(@alignCast(ctx.?));
+    const wayland: *Wayland = @ptrCast(@alignCast(ctx.?));
 
     const interface = std.mem.span(interface_c);
 
     if (registry) |r| {
         if (std.mem.eql(u8, interface, "wl_compositor")) {
-            app.platform.compositor = @ptrCast(c.wl_registry_bind(r, name, &c.wl_compositor_interface, 3));
+            wayland.compositor = @ptrCast(c.wl_registry_bind(r, name, &c.wl_compositor_interface, 3));
         } else if (std.mem.eql(u8, interface, "wl_shm")) {
-            app.platform.shm = @ptrCast(c.wl_registry_bind(r, name, &c.wl_shm_interface, 1));
+            wayland.shm = @ptrCast(c.wl_registry_bind(r, name, &c.wl_shm_interface, 1));
         } else if (std.mem.eql(u8, interface, "zwlr_layer_shell_v1")) {
-            app.platform.layer_shell = @ptrCast(c.wl_registry_bind(r, name, &c.zwlr_layer_shell_v1_interface, 1));
+            wayland.layer_shell = @ptrCast(c.wl_registry_bind(r, name, &c.zwlr_layer_shell_v1_interface, 1));
         }
     } else {
         std.log.err("Invalid registry", .{});
@@ -390,10 +425,10 @@ fn frameDone(ctx: ?*anyopaque, cb: ?*c.wl_callback, _: u32) callconv(.c) void {
 }
 
 fn layerConfigure(ctx: ?*anyopaque, layer_surface: ?*c.zwlr_layer_surface_v1, serial: u32, w: u32, h: u32) callconv(.c) void {
-    const app: *App = @ptrCast(@alignCast(ctx.?));
-    app.width = w;
-    app.height = h;
-    app.configured = true;
+    const wayland: *Wayland = @ptrCast(@alignCast(ctx.?));
+    wayland.width = w;
+    wayland.height = h;
+    wayland.configured = true;
 
     c.zwlr_layer_surface_v1_ack_configure(layer_surface, serial);
 }
@@ -421,10 +456,9 @@ pub fn main(init: std.process.Init) !void {
     var logo = try Image.from_bytes(alloc, logo_image_bytes[0..logo_image_bytes.len :0], 8);
     defer logo.deinit();
 
-    var app = try App.init(logo);
+    var app = try App.init(alloc, logo);
     defer app.deinit();
 
-    try app.setup();
     try app.update();
     try app.render();
 
