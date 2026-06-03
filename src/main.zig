@@ -76,11 +76,23 @@ const Renderer = struct {
 
 const State = struct {
     const Logo = struct {
+        const Colour = enum(u32) {
+            pub fn next(self: Colour) Colour {
+                return switch (self) {
+                    .red => .green,
+                    .green => .blue,
+                    .blue => .red,
+                };
+            }
+            red = 0xFF0000,
+            green = 0x00FF00,
+            blue = 0x0000FF,
+        };
         x: i32 = 0,
-        dx: i32 = 5,
+        dx: i32 = 3,
         y: i32 = 0,
-        dy: i32 = 0,
-        colour: u32 = 0xFF0000,
+        dy: i32 = 3,
+        colour: Colour = Colour.red,
     };
     logo: Logo = .{},
     clear_colour: u32 = 0x00000000,
@@ -119,16 +131,27 @@ const App = struct {
         self.state.logo.y += self.state.logo.dy;
 
         const max_x = @as(i32, @intCast(self.width)) - @as(i32, @intCast(self.logo.width));
+        const max_y = @as(i32, @intCast(self.height)) - @as(i32, @intCast(self.logo.height));
 
         if (self.state.logo.x > max_x) {
             self.state.logo.x = max_x;
             self.state.logo.dx *= -1;
-            self.state.logo.colour = 0x00FF00;
+            self.state.logo.colour = self.state.logo.colour.next();
         }
         if (self.state.logo.x < 0) {
             self.state.logo.x = 0;
             self.state.logo.dx *= -1;
-            self.state.logo.colour = 0xFF0000;
+            self.state.logo.colour = self.state.logo.colour.next();
+        }
+        if (self.state.logo.y > max_y) {
+            self.state.logo.y = max_y;
+            self.state.logo.dy *= -1;
+            self.state.logo.colour = self.state.logo.colour.next();
+        }
+        if (self.state.logo.y < 0) {
+            self.state.logo.y = 0;
+            self.state.logo.dy *= -1;
+            self.state.logo.colour = self.state.logo.colour.next();
         }
     }
 
@@ -139,7 +162,7 @@ const App = struct {
     pub fn render(self: *App) !void {
         const fb = self.platform.buffer.?.pixels;
         Renderer.clear(fb, self.state.clear_colour);
-        Renderer.drawLogo(fb, self.width, &self.logo, @intCast(self.state.logo.x), @intCast(self.state.logo.y), self.platform.buffer.?.stride, self.state.logo.colour);
+        Renderer.drawLogo(fb, self.width, &self.logo, @intCast(self.state.logo.x), @intCast(self.state.logo.y), self.platform.buffer.?.stride, @intFromEnum(self.state.logo.colour));
     }
 
     fn addListeners(self: *App) !void {
@@ -399,7 +422,7 @@ const buffer_listener: c.wl_buffer_listener = .{
 pub fn main(init: std.process.Init) !void {
     const alloc = init.gpa;
 
-    var logo = try Image.from_bytes(alloc, logo_image_bytes[0..logo_image_bytes.len :0], 4);
+    var logo = try Image.from_bytes(alloc, logo_image_bytes[0..logo_image_bytes.len :0], 8);
     defer logo.deinit();
 
     var app = try App.init(logo);
