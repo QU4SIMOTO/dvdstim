@@ -14,6 +14,22 @@ const stbi = @cImport({
 
 const logo_image_bytes = @embedFile("logo.jpg");
 
+const Renderer = struct {
+    fn drawLogo(pixels: []u32, width: u32, logo: *Image, x_off: u32, y_off: u32) void {
+        for (0..logo.pixels.len / logo.width) |y| {
+            for (0..logo.width) |x| {
+                const fb_i = (y + y_off) * width + (x + x_off);
+                const logo_i = y * logo.width + x;
+                pixels[fb_i] = logo.pixels[logo_i];
+            }
+        }
+    }
+
+    fn clear(pixels: []u32, colour: u32) void {
+        for (pixels) |*p| p.* = colour;
+    }
+};
+
 const App = struct {
     width: u32 = 0,
     height: u32 = 0,
@@ -58,8 +74,9 @@ const App = struct {
     }
 
     pub fn render(self: *App) !void {
-        self.clear();
-        self.drawLogo();
+        const fb = self.buffer.?.pixels;
+        Renderer.clear(fb, 0x00000000);
+        Renderer.drawLogo(fb, self.width, &self.logo, self.logo_x, self.logo_y);
     }
 
     pub fn present(self: *App) !void {
@@ -111,30 +128,6 @@ const App = struct {
 
     fn createBuffers(self: *App) !void {
         self.buffer = try Buffer.init(self.width, self.height, self.shm.?);
-    }
-
-    fn drawLogo(self: *App) void {
-        const fb = self.buffer.?.pixels;
-        const logo = self.logo.pixels;
-
-        const fb_w = self.width;
-        const logo_w = self.logo.width;
-
-        for (0..self.logo.height) |y| {
-            for (0..self.logo.width) |x| {
-                const fb_index = (y + self.logo_y) * fb_w + (x + self.logo_x);
-                const logo_index = y * logo_w + x;
-
-                fb[fb_index] = logo[logo_index];
-            }
-        }
-    }
-
-    fn clear(self: *App) void {
-        const fb = self.buffer.?.pixels;
-        for (fb) |*p| {
-            p.* = 0x00000000;
-        }
     }
 };
 
