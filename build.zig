@@ -7,9 +7,13 @@ pub fn build(b: *std.Build) void {
     const exe = b.addExecutable(.{ .name = "dvd-logo", .root_module = b.createModule(.{ .root_source_file = b.path("src/main.zig"), .target = target, .optimize = optimize, .link_libc = true }) });
 
     exe.root_module.linkSystemLibrary("wayland-client", .{});
+
     exe.root_module.addCSourceFile(.{ .file = b.path("protocols/xdg-shell-client-protocol.c") });
     exe.root_module.addCSourceFile(.{ .file = b.path("protocols/wlr-layer-shell-unstable-v1-protocol.c") });
     exe.root_module.addIncludePath(b.path("protocols"));
+
+    exe.root_module.addCSourceFile(.{ .file = b.path("src/stb_image.c") });
+    exe.root_module.addIncludePath(b.path("src"));
 
     b.installArtifact(exe);
 

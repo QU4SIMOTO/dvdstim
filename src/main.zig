@@ -1,16 +1,23 @@
 const std = @import("std");
 const posix = std.posix;
 const linux = std.os.linux;
+const Allocator = std.mem.Allocator;
 
 const c = @cImport({
     @cInclude("wayland-client.h");
     @cInclude("xdg-shell-client-protocol.h");
     @cInclude("wlr-layer-shell-unstable-v1-client-protocol.h");
 });
+const stbi = @cImport({
+    @cInclude("stb_image.h");
+});
+
+const logo_image_bytes = @embedFile("logo.jpg");
 
 const App = struct {
     width: u32 = 0,
     height: u32 = 0,
+    logo: Image,
     configured: bool = false,
     display: *c.struct_wl_display,
     registry: ?*c.struct_wl_registry,
@@ -20,15 +27,16 @@ const App = struct {
     surface: ?*c.struct_wl_surface = null,
     layer_surface: ?*c.struct_zwlr_layer_surface_v1 = null,
     buffer: ?Buffer = null,
-    frame: u32 = 0, // TODO: remove
+    logo_x: u32 = 0,
+    logo_y: u32 = 0,
 
-    pub fn init() !App {
+    pub fn init(logo: Image) !App {
         const display = c.wl_display_connect(null) orelse return error.DisplayConnect;
         errdefer c.wl_display_disconnect(display);
 
         const registry = c.wl_display_get_registry(display) orelse return error.RegistryConnect;
 
-        return .{ .display = display, .registry = registry };
+        return .{ .logo = logo, .display = display, .registry = registry };
     }
 
     pub fn deinit(self: *App) void {
@@ -46,15 +54,12 @@ const App = struct {
     }
 
     pub fn update(self: *App) !void {
-        const pixels = self.buffer.?.pixels;
-        self.frame +%= 1;
+        self.logo_x += 5;
+    }
 
-        const alpha: u32 = 0x40;
-        const r: u32 = (self.frame & 0xFF) * alpha / 255;
-        const b: u32 = ((255 - (self.frame & 0xFF))) * alpha / 255;
-        const color = (alpha << 24) | (r << 16) | b;
-
-        @memset(pixels, color);
+    pub fn render(self: *App) !void {
+        self.clear();
+        self.drawLogo();
     }
 
     pub fn present(self: *App) !void {
@@ -107,6 +112,30 @@ const App = struct {
     fn createBuffers(self: *App) !void {
         self.buffer = try Buffer.init(self.width, self.height, self.shm.?);
     }
+
+    fn drawLogo(self: *App) void {
+        const fb = self.buffer.?.pixels;
+        const logo = self.logo.pixels;
+
+        const fb_w = self.width;
+        const logo_w = self.logo.width;
+
+        for (0..self.logo.height) |y| {
+            for (0..self.logo.width) |x| {
+                const fb_index = (y + self.logo_y) * fb_w + (x + self.logo_x);
+                const logo_index = y * logo_w + x;
+
+                fb[fb_index] = logo[logo_index];
+            }
+        }
+    }
+
+    fn clear(self: *App) void {
+        const fb = self.buffer.?.pixels;
+        for (fb) |*p| {
+            p.* = 0x00000000;
+        }
+    }
 };
 
 const Buffer = struct {
@@ -116,13 +145,14 @@ const Buffer = struct {
     pixels: []u32,
 
     fn init(width: u32, height: u32, shm: *c.wl_shm) !Buffer {
-        const size = width * height * 4;
-        const stride: i32 = @intCast(width * 4);
+        const stride: usize = width * 4;
+        const size: usize = stride * height;
         const fd = try posix.memfd_create("overlay", 0);
 
         defer _ = linux.close(fd);
 
-        if (linux.ftruncate(fd, size) != 0) return error.FTruncate;
+        if (linux.ftruncate(fd, @as(i64, @intCast(size))) != 0)
+            return error.FTruncate;
 
         const data = try posix.mmap(
             null,
@@ -134,10 +164,10 @@ const Buffer = struct {
         );
         errdefer posix.munmap(data);
 
-        const pixels: []u32 = @as([*]u32, @ptrCast(@alignCast(data)))[0 .. data.len / @sizeOf(u32)];
+        const pixels: []u32 = @as([*]align(4) u32, @ptrCast(data))[0 .. width * height];
 
         for (0..pixels.len) |i| {
-            pixels[i] = 0x110000FF;
+            pixels[i] = 0x11000000;
         }
 
         const pool = c.wl_shm_create_pool(shm, fd, @intCast(size)) orelse return error.CreatePool;
@@ -146,9 +176,9 @@ const Buffer = struct {
         const buffer = c.wl_shm_pool_create_buffer(
             pool,
             0,
-            @intCast(width),
-            @intCast(height),
-            stride,
+            @as(i32, @intCast(width)),
+            @as(i32, @intCast(height)),
+            @as(i32, @intCast(stride)),
             c.WL_SHM_FORMAT_ARGB8888,
         ) orelse return error.CreateBuffer;
 
@@ -192,6 +222,10 @@ fn frameDone(ctx: ?*anyopaque, cb: ?*c.wl_callback, _: u32) callconv(.c) void {
         std.log.err("Update error {any}", .{e});
     };
 
+    app.render() catch |e| {
+        std.log.err("Render error {any}", .{e});
+    };
+
     const next = c.wl_surface_frame(app.surface);
     if (c.wl_callback_add_listener(next, &frame_listener, app) != 0) {
         std.log.err("adding frame listener callback", .{});
@@ -221,12 +255,78 @@ const layer_listener: c.zwlr_layer_surface_v1_listener = .{
 };
 const frame_listener: c.wl_callback_listener = .{ .done = &frameDone };
 
-pub fn main() !void {
-    var app = try App.init();
+const Image = struct {
+    alloc: Allocator,
+    width: u32,
+    height: u32,
+    channels: u32,
+    pixels: []u32,
+
+    pub fn from_bytes(alloc: Allocator, bytes: []const u8) !Image {
+        var width_c: c_int = 0;
+        var height_c: c_int = 0;
+        var channels: c_int = 0;
+
+        const pixels_c = stbi.stbi_load_from_memory(
+            bytes.ptr,
+            @intCast(bytes.len),
+            &width_c,
+            &height_c,
+            &channels,
+            4,
+        ) orelse return error.ImageLoadFailed;
+
+        const width: u32 = @intCast(width_c);
+        const height: u32 = @intCast(height_c);
+        const pixel_count: usize = width * height;
+
+        const pixels = try alloc.alloc(u32, pixel_count);
+
+        const src = @as([*]u8, @ptrCast(pixels_c))[0 .. pixel_count * 4];
+
+        for (pixels, 0..) |*dst, i| {
+            const base = i * 4;
+
+            const r = src[base + 0];
+            const g = src[base + 1];
+            const b = src[base + 2];
+            const a = src[base + 3];
+
+            dst.* =
+                (@as(u32, a) << 24) |
+                (@as(u32, r) << 16) |
+                (@as(u32, g) << 8) |
+                @as(u32, b);
+        }
+
+        stbi.stbi_image_free(pixels_c);
+
+        return .{
+            .alloc = alloc,
+            .width = width,
+            .height = height,
+            .channels = @intCast(4),
+            .pixels = pixels,
+        };
+    }
+
+    pub fn deinit(self: *Image) void {
+        self.alloc.free(self.pixels);
+    }
+};
+
+pub fn main(init: std.process.Init) !void {
+    const alloc = init.gpa;
+
+    var logo = try Image.from_bytes(alloc, logo_image_bytes[0..logo_image_bytes.len :0]);
+    defer logo.deinit();
+
+    var app = try App.init(logo);
     defer app.deinit();
 
     try app.setup();
     try app.update();
+    try app.render();
 
     const cb = c.wl_surface_frame(app.surface);
     _ = c.wl_callback_add_listener(cb, &frame_listener, &app);
