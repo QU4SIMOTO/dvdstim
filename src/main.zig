@@ -81,12 +81,18 @@ const State = struct {
                 return switch (self) {
                     .red => .green,
                     .green => .blue,
-                    .blue => .red,
+                    .blue => .yellow,
+                    .yellow => .magenta,
+                    .magenta => .aqua,
+                    .aqua => .red,
                 };
             }
             red = 0xFF0000,
             green = 0x00FF00,
             blue = 0x0000FF,
+            yellow = 0xFFFF00,
+            magenta = 0xFF00FF,
+            aqua = 0x00FFFF,
         };
         x: i32 = 0,
         dx: i32 = 3,
@@ -127,32 +133,22 @@ const App = struct {
     }
 
     pub fn update(self: *App) !void {
-        self.state.logo.x += self.state.logo.dx;
-        self.state.logo.y += self.state.logo.dy;
-
         const max_x = @as(i32, @intCast(self.width)) - @as(i32, @intCast(self.logo.width));
         const max_y = @as(i32, @intCast(self.height)) - @as(i32, @intCast(self.logo.height));
 
-        if (self.state.logo.x > max_x) {
-            self.state.logo.x = max_x;
+        const next_x = self.state.logo.x + self.state.logo.dx;
+
+        if (next_x > max_x or next_x < 0) {
             self.state.logo.dx *= -1;
             self.state.logo.colour = self.state.logo.colour.next();
-        }
-        if (self.state.logo.x < 0) {
-            self.state.logo.x = 0;
-            self.state.logo.dx *= -1;
-            self.state.logo.colour = self.state.logo.colour.next();
-        }
-        if (self.state.logo.y > max_y) {
-            self.state.logo.y = max_y;
+        } else self.state.logo.x = next_x;
+
+        const next_y = self.state.logo.y + self.state.logo.dy;
+
+        if (next_y > max_y or next_y < 0) {
             self.state.logo.dy *= -1;
             self.state.logo.colour = self.state.logo.colour.next();
-        }
-        if (self.state.logo.y < 0) {
-            self.state.logo.y = 0;
-            self.state.logo.dy *= -1;
-            self.state.logo.colour = self.state.logo.colour.next();
-        }
+        } else self.state.logo.y = next_y;
     }
 
     pub fn present(self: *App) !void {
