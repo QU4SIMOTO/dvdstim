@@ -15,9 +15,10 @@ const Renderer = struct {
         const tg = (tint >> 8) & 0xFF;
         const tb = tint & 0xFF;
 
+        const row_stride = fb.stride / 4;
+
         for (0..logo.pixels.len / logo.width) |y| {
             for (0..logo.width) |x| {
-                const row_stride = fb.stride / 4;
                 const fb_i = (y + y_off) * row_stride + (x + x_off);
                 const logo_i = y * logo.width + x;
 
