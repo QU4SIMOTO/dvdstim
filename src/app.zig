@@ -5,6 +5,7 @@ const Image = @import("image.zig");
 const Wayland = @import("wayland.zig").Wayland;
 const Buffer = @import("wayland.zig").Buffer;
 const FrameBuffer = @import("wayland.zig").FrameBuffer;
+const Rect = @import("wayland.zig").Rect;
 
 const Self = @This();
 
@@ -39,8 +40,12 @@ const Renderer = struct {
         }
     }
 
-    fn clear(pixels: []u32, colour: u32) void {
-        for (pixels) |*p| p.* = colour;
+    fn clearRect(fb: FrameBuffer, rect: Rect, colour: u32) void {
+        const row_stride = fb.stride / 4;
+        for (rect.y..rect.y + rect.h) |y| {
+            const start = y * row_stride + rect.x;
+            for (fb.pixels[start .. start + rect.w]) |*p| p.* = colour;
+        }
     }
 };
 
@@ -114,8 +119,14 @@ pub fn present(self: *Self, buf: *Buffer) !void {
 
 pub fn render(self: *Self, buf: *Buffer) !void {
     const fb = self.wayland.frameBuffer(buf);
-    Renderer.clear(fb.pixels, self.state.clear_colour);
-    Renderer.drawLogo(fb, self.logo, @intCast(self.state.logo.pos[0]), @intCast(self.state.logo.pos[1]), @intFromEnum(self.state.logo.colour));
+
+    if (buf.last_logo) |rect| Renderer.clearRect(fb, rect, self.state.clear_colour);
+
+    const x: u32 = @intCast(self.state.logo.pos[0]);
+    const y: u32 = @intCast(self.state.logo.pos[1]);
+    Renderer.drawLogo(fb, self.logo, x, y, @intFromEnum(self.state.logo.colour));
+
+    buf.last_logo = .{ .x = x, .y = y, .w = self.logo.width, .h = self.logo.height };
 }
 
 fn frameDone(ctx: ?*anyopaque, _: ?*c.wl_callback, _: u32) callconv(.c) void {

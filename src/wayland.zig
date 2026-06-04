@@ -7,6 +7,8 @@ const Allocator = std.mem.Allocator;
 
 pub const FrameBuffer = struct { width: u32, height: u32, stride: usize, pixels: []u32 };
 
+pub const Rect = struct { x: u32, y: u32, w: u32, h: u32 };
+
 pub const Buffer = struct {
     const buffer_listener: c.wl_buffer_listener = .{
         .release = &bufferRelease,
@@ -18,6 +20,7 @@ pub const Buffer = struct {
     pixels: []u32,
     stride: usize,
     busy: bool = false,
+    last_logo: ?Rect = null,
 
     fn init(width: u32, height: u32, shm: *c.wl_shm) !Buffer {
         const stride: usize = width * 4;
@@ -42,7 +45,7 @@ pub const Buffer = struct {
         const pixels: []u32 = @as([*]align(4) u32, @ptrCast(data))[0 .. width * height];
 
         for (0..pixels.len) |i| {
-            pixels[i] = 0x11000000;
+            pixels[i] = 0x00000000;
         }
 
         const pool = c.wl_shm_create_pool(shm, fd, @intCast(size)) orelse return error.CreatePool;
