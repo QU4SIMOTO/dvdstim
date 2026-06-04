@@ -98,6 +98,7 @@ pub const Wayland = struct {
     layer_surface: ?*c.struct_zwlr_layer_surface_v1 = null,
     buffers: [2]Buffer = undefined,
     configured: bool = false,
+    frame_cb: ?*c.struct_wl_callback = null,
 
     pub fn init(alloc: Allocator) !*Wayland {
         const display = c.wl_display_connect(null) orelse return error.DisplayConnect;
@@ -130,9 +131,13 @@ pub const Wayland = struct {
     }
 
     pub fn deinit(self: *Wayland) void {
+        if (self.frame_cb) |cb| c.wl_callback_destroy(cb);
         for (&self.buffers) |*b| b.deinit();
         if (self.layer_surface) |l| c.zwlr_layer_surface_v1_destroy(l);
         if (self.surface) |s| c.wl_surface_destroy(s);
+        if (self.globals.layer_shell) |l| c.wl_proxy_destroy(@ptrCast(l));
+        if (self.globals.shm) |s| c.wl_proxy_destroy(@ptrCast(s));
+        if (self.globals.compositor) |comp| c.wl_proxy_destroy(@ptrCast(comp));
         c.wl_registry_destroy(self.registry);
         c.wl_display_disconnect(self.display);
         self.alloc.destroy(self);
@@ -143,8 +148,13 @@ pub const Wayland = struct {
     }
 
     pub fn requestFrame(self: *Wayland, listener: *const c.wl_callback_listener, ctx: ?*anyopaque) !void {
-        const cb = c.wl_surface_frame(self.surface);
-        if (c.wl_callback_add_listener(cb, listener, ctx) != 0) return error.AddFrameListener;
+        const cb = c.wl_surface_frame(self.surface) orelse return error.RequestFrame;
+        if (c.wl_callback_add_listener(cb, listener, ctx) != 0) {
+            c.wl_callback_destroy(cb);
+            self.frame_cb = null;
+            return error.AddFrameListener;
+        }
+        self.frame_cb = cb;
     }
 
     pub fn present(self: *Wayland, buf: *Buffer, x: i32, y: i32, w: i32, h: i32) void {
