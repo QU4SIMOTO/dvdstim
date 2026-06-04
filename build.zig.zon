@@ -1,6 +1,6 @@
 .{
     .name = .dvdstim,
-    .version = "0.0.1",
+    .version = "0.0.2",
     .dependencies = .{
         .stb = .{
             .url = "git+https://github.com/nothings/stb#31c1ad37456438565541f4919958214b6e762fb4",

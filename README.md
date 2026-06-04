@@ -9,6 +9,7 @@ Built as a learning project for libwayland and Zig.
 - Zig 0.16.0+
 - A wlroots-based compositor (Sway, Hyprland, river, ...) for `wlr-layer-shell` support
 - `wayland-client` dev headers
+- `wayland-scanner` (generates the protocol glue at build time)
 
 ## Build and run
 ```sh
