@@ -4,79 +4,33 @@ const Allocator = std.mem.Allocator;
 const Image = @import("image.zig");
 const Wayland = @import("wayland.zig").Wayland;
 const Buffer = @import("wayland.zig").Buffer;
-const FrameBuffer = @import("wayland.zig").FrameBuffer;
-const Rect = @import("wayland.zig").Rect;
+const renderer = @import("renderer.zig");
+const Renderer = renderer.Renderer;
+const Effect = renderer.Effect;
+const Colour = renderer.Colour;
 
 const Self = @This();
 
+io: std.Io,
 logo: *const Image,
 wayland: *Wayland,
 state: State,
 
 const Vec2 = @Vector(2, i32);
 
-const Renderer = struct {
-    fn drawLogo(fb: FrameBuffer, logo: *const Image, x_off: u32, y_off: u32, tint: u32) void {
-        const tr = (tint >> 16) & 0xFF;
-        const tg = (tint >> 8) & 0xFF;
-        const tb = tint & 0xFF;
-
-        const row_stride = fb.stride / 4;
-
-        for (0..logo.height) |y| {
-            for (0..logo.width) |x| {
-                const fb_i = (y + y_off) * row_stride + (x + x_off);
-                const logo_i = y * logo.width + x;
-
-                const a = logo.pixels[logo_i] >> 24;
-                const af = @as(f32, @floatFromInt(a)) / 255.0;
-
-                const r = @as(u32, @intFromFloat(@as(f32, @floatFromInt(tr)) * af));
-                const g = @as(u32, @intFromFloat(@as(f32, @floatFromInt(tg)) * af));
-                const b = @as(u32, @intFromFloat(@as(f32, @floatFromInt(tb)) * af));
-
-                fb.pixels[fb_i] = (a << 24) | (r << 16) | (g << 8) | b;
-            }
-        }
-    }
-
-    fn clearRect(fb: FrameBuffer, rect: Rect, colour: u32) void {
-        const row_stride = fb.stride / 4;
-        for (rect.y..rect.y + rect.h) |y| {
-            const start = y * row_stride + rect.x;
-            for (fb.pixels[start .. start + rect.w]) |*p| p.* = colour;
-        }
-    }
-};
-
 const State = struct {
     const Logo = struct {
         const speed: i32 = 3;
-        const Colour = enum(u32) {
-            pub fn next(self: Colour) Colour {
-                return switch (self) {
-                    .red => .green,
-                    .green => .blue,
-                    .blue => .yellow,
-                    .yellow => .magenta,
-                    .magenta => .aqua,
-                    .aqua => .red,
-                };
-            }
-            red = 0xFF0000,
-            green = 0x00FF00,
-            blue = 0x0000FF,
-            yellow = 0xFFFF00,
-            magenta = 0xFF00FF,
-            aqua = 0x00FFFF,
-        };
         pos: Vec2 = .{ 0, 0 },
         pre: Vec2 = .{ 0, 0 },
         vel: Vec2 = .{ speed, speed },
-        colour: Colour = Colour.red,
     };
     logo: Logo = .{},
     clear_colour: u32 = 0x00000000,
+    hit_corner: bool = false,
+    bounce_effect: Effect = .{ .aberration = .red },
+    corner_effect: Effect = .rainbow,
+    phase: f32 = 0,
 };
 
 pub const frame_listener: c.wl_callback_listener = .{ .done = &frameDone };
@@ -97,12 +51,16 @@ pub fn init(alloc: Allocator, logo: *const Image, io: std.Io) !Self {
         if (rand.boolean()) speed else -speed,
     };
 
-    const colour = rand.enumValue(State.Logo.Colour);
+    const colour = rand.enumValue(Colour);
+
+    var state: State = .{ .logo = .{ .pos = pos, .vel = vel } };
+    state.bounce_effect.setColour(colour);
 
     return .{
+        .io = io,
         .logo = logo,
         .wayland = wayland,
-        .state = .{ .logo = .{ .pos = pos, .vel = vel, .colour = colour } },
+        .state = state,
     };
 }
 
@@ -111,6 +69,10 @@ pub fn deinit(self: *Self) void {
 }
 
 pub fn update(self: *Self) !void {
+    self.state.phase = @mod(self.state.phase + 4.0, 360.0);
+    if (self.state.hit_corner) {
+        return;
+    }
     self.state.logo.pre = self.state.logo.pos;
 
     const max_x = @as(i32, @intCast(self.wayland.width)) - @as(i32, @intCast(self.logo.width));
@@ -118,14 +80,23 @@ pub fn update(self: *Self) !void {
 
     const next = self.state.logo.pos + self.state.logo.vel;
 
-    if (next[0] > max_x or next[0] < 0) {
+    const hit_x = next[0] > max_x or next[0] < 0;
+    const hit_y = next[1] > max_y or next[1] < 0;
+
+    if (hit_x and hit_y) {
+        self.state.hit_corner = true;
+        if (self.state.bounce_effect.colour()) |col| self.state.corner_effect.setColour(col);
+        return;
+    }
+
+    if (hit_x) {
         self.state.logo.vel[0] *= -1;
-        self.state.logo.colour = self.state.logo.colour.next();
+        self.state.bounce_effect.cycle();
     } else self.state.logo.pos[0] = next[0];
 
-    if (next[1] > max_y or next[1] < 0) {
+    if (hit_y) {
         self.state.logo.vel[1] *= -1;
-        self.state.logo.colour = self.state.logo.colour.next();
+        self.state.bounce_effect.cycle();
     } else self.state.logo.pos[1] = next[1];
 }
 
@@ -144,7 +115,13 @@ pub fn render(self: *Self, buf: *Buffer) !void {
 
     const x: u32 = @intCast(self.state.logo.pos[0]);
     const y: u32 = @intCast(self.state.logo.pos[1]);
-    Renderer.drawLogo(fb, self.logo, x, y, @intFromEnum(self.state.logo.colour));
+
+    const effect = if (self.state.hit_corner) self.state.corner_effect else self.state.bounce_effect;
+    const src: std.Random.IoSource = .{ .io = self.io };
+    Renderer.draw(effect, fb, self.logo, x, y, .{
+        .phase = self.state.phase,
+        .rand = src.interface(),
+    });
 
     buf.last_logo = .{ .x = x, .y = y, .w = self.logo.width, .h = self.logo.height };
 }
