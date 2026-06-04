@@ -13,7 +13,7 @@ pub fn build(b: *std.Build) void {
     translate_c.addIncludePath(b.path("protocols"));
     translate_c.addIncludePath(b.path("vendor"));
 
-    const exe = b.addExecutable(.{ .name = "dvd-logo", .root_module = b.createModule(.{ .root_source_file = b.path("src/main.zig"), .target = target, .optimize = optimize, .link_libc = true }) });
+    const exe = b.addExecutable(.{ .name = "dvdstim", .root_module = b.createModule(.{ .root_source_file = b.path("src/main.zig"), .target = target, .optimize = optimize, .link_libc = true }) });
 
     exe.root_module.addImport("c", translate_c.createModule());
 

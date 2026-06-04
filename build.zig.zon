@@ -1,7 +1,7 @@
 .{
-    .name = .dvd_logo,
+    .name = .dvdstim,
     .version = "0.0.1",
     .minimum_zig_version = "0.16.0",
     .paths = .{""},
-    .fingerprint = 0x52d7c460444b7db6,
+    .fingerprint = 0xfe128a2cfb12733a,
 }

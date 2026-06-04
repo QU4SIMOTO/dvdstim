@@ -185,7 +185,7 @@ pub const Wayland = struct {
         self.surface = c.wl_compositor_create_surface(self.globals.compositor);
 
         self.layer_surface =
-            c.zwlr_layer_shell_v1_get_layer_surface(self.globals.layer_shell, self.surface, null, c.ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, "dvd-logo");
+            c.zwlr_layer_shell_v1_get_layer_surface(self.globals.layer_shell, self.surface, null, c.ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, "dvdstim");
 
         if (c.zwlr_layer_surface_v1_add_listener(self.layer_surface, &layer_listener, self) != 0) return error.AddSurfaceListener;
 
