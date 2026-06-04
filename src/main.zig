@@ -10,7 +10,7 @@ pub fn main(init: std.process.Init) !void {
     var logo = try Image.fromBytes(alloc, logo_image_bytes[0..logo_image_bytes.len :0], 8);
     defer logo.deinit();
 
-    var application = try App.init(alloc, &logo);
+    var application = try App.init(alloc, &logo, init.io);
     defer application.deinit();
 
     try application.update();
