@@ -4,7 +4,7 @@ const app = @import("app.zig");
 
 const App = app.App;
 
-const logo_image_bytes = @embedFile("dvd-logo.png");
+const logo_image_bytes = @embedFile("dvd-logo");
 
 pub fn main(init: std.process.Init) !void {
     const alloc = init.gpa;
