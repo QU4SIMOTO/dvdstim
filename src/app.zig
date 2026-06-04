@@ -1,13 +1,18 @@
 const std = @import("std");
 const c = @import("c");
-const Image = @import("image.zig");
-const platform = @import("platform.zig");
-
 const Allocator = std.mem.Allocator;
+const Image = @import("image.zig");
+const Wayland = @import("wayland.zig").Wayland;
+const Buffer = @import("wayland.zig").Buffer;
+const FrameBuffer = @import("wayland.zig").FrameBuffer;
 
-const Wayland = platform.Wayland;
-const Buffer = platform.Buffer;
-const FrameBuffer = platform.FrameBuffer;
+const Self = @This();
+
+logo: *const Image,
+wayland: *Wayland,
+state: State,
+
+const Vec2 = @Vector(2, i32);
 
 const Renderer = struct {
     fn drawLogo(fb: FrameBuffer, logo: *const Image, x_off: u32, y_off: u32, tint: u32) void {
@@ -39,8 +44,6 @@ const Renderer = struct {
     }
 };
 
-const Vec2 = @Vector(2, i32);
-
 const State = struct {
     const Logo = struct {
         const Colour = enum(u32) {
@@ -70,77 +73,71 @@ const State = struct {
     clear_colour: u32 = 0x00000000,
 };
 
-pub const App = struct {
-    pub const frame_listener: c.wl_callback_listener = .{ .done = &frameDone };
+pub const frame_listener: c.wl_callback_listener = .{ .done = &frameDone };
 
-    logo: *const Image,
-    platform: *Wayland,
-    state: State,
+pub fn init(alloc: Allocator, logo: *const Image) !Self {
+    const wayland = try Wayland.init(alloc);
 
-    pub fn init(alloc: Allocator, logo: *const Image) !App {
-        const wayland = try Wayland.init(alloc);
+    return .{ .logo = logo, .wayland = wayland, .state = .{} };
+}
 
-        return .{ .logo = logo, .platform = wayland, .state = .{} };
-    }
+pub fn deinit(self: *Self) void {
+    self.wayland.deinit();
+}
 
-    pub fn deinit(self: *App) void {
-        self.platform.deinit();
-    }
+pub fn update(self: *Self) !void {
+    self.state.logo.pre = self.state.logo.pos;
 
-    pub fn update(self: *App) !void {
-        self.state.logo.pre = self.state.logo.pos;
+    const max_x = @as(i32, @intCast(self.wayland.width)) - @as(i32, @intCast(self.logo.width));
+    const max_y = @as(i32, @intCast(self.wayland.height)) - @as(i32, @intCast(self.logo.height));
 
-        const max_x = @as(i32, @intCast(self.platform.width)) - @as(i32, @intCast(self.logo.width));
-        const max_y = @as(i32, @intCast(self.platform.height)) - @as(i32, @intCast(self.logo.height));
+    const next = self.state.logo.pos + self.state.logo.vel;
 
-        const next = self.state.logo.pos + self.state.logo.vel;
+    if (next[0] > max_x or next[0] < 0) {
+        self.state.logo.vel[0] *= -1;
+        self.state.logo.colour = self.state.logo.colour.next();
+    } else self.state.logo.pos[0] = next[0];
 
-        if (next[0] > max_x or next[0] < 0) {
-            self.state.logo.vel[0] *= -1;
-            self.state.logo.colour = self.state.logo.colour.next();
-        } else self.state.logo.pos[0] = next[0];
+    if (next[1] > max_y or next[1] < 0) {
+        self.state.logo.vel[1] *= -1;
+        self.state.logo.colour = self.state.logo.colour.next();
+    } else self.state.logo.pos[1] = next[1];
+}
 
-        if (next[1] > max_y or next[1] < 0) {
-            self.state.logo.vel[1] *= -1;
-            self.state.logo.colour = self.state.logo.colour.next();
-        } else self.state.logo.pos[1] = next[1];
-    }
+pub fn present(self: *Self, buf: *Buffer) !void {
+    const lo = @min(self.state.logo.pos, self.state.logo.pre);
+    const dims: @Vector(2, u32) = .{ self.logo.width, self.logo.height };
+    const size: Vec2 = @intCast(@abs(self.state.logo.pos - self.state.logo.pre) + dims);
 
-    pub fn present(self: *App, buf: *Buffer) !void {
-        const lo = @min(self.state.logo.pos, self.state.logo.pre);
-        const dims: @Vector(2, u32) = .{ self.logo.width, self.logo.height };
-        const size: Vec2 = @intCast(@abs(self.state.logo.pos - self.state.logo.pre) + dims);
+    self.wayland.present(buf, lo[0], lo[1], size[0], size[1]);
+}
 
-        self.platform.present(buf, lo[0], lo[1], size[0], size[1]);
-    }
+pub fn render(self: *Self, buf: *Buffer) !void {
+    const fb = self.wayland.frameBuffer(buf);
+    Renderer.clear(fb.pixels, self.state.clear_colour);
+    Renderer.drawLogo(fb, self.logo, @intCast(self.state.logo.pos[0]), @intCast(self.state.logo.pos[1]), @intFromEnum(self.state.logo.colour));
+}
 
-    pub fn render(self: *App, buf: *Buffer) !void {
-        const fb = self.platform.frameBuffer(buf);
-        Renderer.clear(fb.pixels, self.state.clear_colour);
-        Renderer.drawLogo(fb, self.logo, @intCast(self.state.logo.pos[0]), @intCast(self.state.logo.pos[1]), @intFromEnum(self.state.logo.colour));
-    }
+fn frameDone(ctx: ?*anyopaque, _: ?*c.wl_callback, _: u32) callconv(.c) void {
+    const app: *Self = @ptrCast(@alignCast(ctx.?));
 
-    fn frameDone(ctx: ?*anyopaque, _: ?*c.wl_callback, _: u32) callconv(.c) void {
-        const app: *App = @ptrCast(@alignCast(ctx.?));
+    app.wayland.requestFrame(&frame_listener, app) catch |e| {
+        std.log.err("Adding frame listener callback {any}", .{e});
+    };
 
-        app.platform.requestFrame(&frame_listener, app) catch |e| {
-            std.log.err("Adding frame listener callback {any}", .{e});
+    if (app.wayland.getFreeBuffer()) |buf| {
+        app.update() catch |e| {
+            std.log.err("Update error {any}", .{e});
         };
 
-        if (app.platform.getFreeBuffer()) |buf| {
-            app.update() catch |e| {
-                std.log.err("Update error {any}", .{e});
-            };
+        app.render(buf) catch |e| {
+            std.log.err("Render error {any}", .{e});
+        };
 
-            app.render(buf) catch |e| {
-                std.log.err("Render error {any}", .{e});
-            };
-
-            app.present(buf) catch |e| {
-                std.log.err("Present error {any}", .{e});
-            };
-        } else {
-            app.platform.commit();
-        }
+        app.present(buf) catch |e| {
+            std.log.err("Present error {any}", .{e});
+        };
+    } else {
+        app.wayland.commit();
     }
-};
+}

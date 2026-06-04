@@ -1,8 +1,6 @@
 const std = @import("std");
 const Image = @import("image.zig");
-const app = @import("app.zig");
-
-const App = app.App;
+const App = @import("app.zig");
 
 const logo_image_bytes = @embedFile("dvd-logo");
 
@@ -16,13 +14,13 @@ pub fn main(init: std.process.Init) !void {
     defer application.deinit();
 
     try application.update();
-    if (application.platform.getFreeBuffer()) |buf| {
+    if (application.wayland.getFreeBuffer()) |buf| {
         try application.render(buf);
 
-        try application.platform.requestFrame(&App.frame_listener, &application);
+        try application.wayland.requestFrame(&App.frame_listener, &application);
 
         try application.present(buf);
     }
 
-    while (application.platform.dispatch()) {}
+    while (application.wayland.dispatch()) {}
 }
