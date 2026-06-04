@@ -10,14 +10,14 @@ const Buffer = platform.Buffer;
 const FrameBuffer = platform.FrameBuffer;
 
 const Renderer = struct {
-    fn drawLogo(fb: FrameBuffer, logo: *Image, x_off: u32, y_off: u32, tint: u32) void {
+    fn drawLogo(fb: FrameBuffer, logo: *const Image, x_off: u32, y_off: u32, tint: u32) void {
         const tr = (tint >> 16) & 0xFF;
         const tg = (tint >> 8) & 0xFF;
         const tb = tint & 0xFF;
 
         const row_stride = fb.stride / 4;
 
-        for (0..logo.pixels.len / logo.width) |y| {
+        for (0..logo.height) |y| {
             for (0..logo.width) |x| {
                 const fb_i = (y + y_off) * row_stride + (x + x_off);
                 const logo_i = y * logo.width + x;

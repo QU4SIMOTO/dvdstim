@@ -67,7 +67,7 @@ pub const Buffer = struct {
     }
 
     fn bufferRelease(ctx: ?*anyopaque, _: ?*c.wl_buffer) callconv(.c) void {
-        const self: *Buffer = @ptrCast(@alignCast(ctx));
+        const self: *Buffer = @ptrCast(@alignCast(ctx.?));
         self.busy = false;
     }
 };
