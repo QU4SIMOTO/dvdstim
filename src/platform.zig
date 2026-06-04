@@ -148,10 +148,11 @@ pub const Wayland = struct {
     }
 
     pub fn requestFrame(self: *Wayland, listener: *const c.wl_callback_listener, ctx: ?*anyopaque) !void {
+        if (self.frame_cb) |old| c.wl_callback_destroy(old);
+        self.frame_cb = null;
         const cb = c.wl_surface_frame(self.surface) orelse return error.RequestFrame;
         if (c.wl_callback_add_listener(cb, listener, ctx) != 0) {
             c.wl_callback_destroy(cb);
-            self.frame_cb = null;
             return error.AddFrameListener;
         }
         self.frame_cb = cb;

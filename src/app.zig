@@ -120,9 +120,8 @@ pub const App = struct {
         Renderer.drawLogo(fb, self.logo, @intCast(self.state.logo.pos[0]), @intCast(self.state.logo.pos[1]), @intFromEnum(self.state.logo.colour));
     }
 
-    fn frameDone(ctx: ?*anyopaque, cb: ?*c.wl_callback, _: u32) callconv(.c) void {
+    fn frameDone(ctx: ?*anyopaque, _: ?*c.wl_callback, _: u32) callconv(.c) void {
         const app: *App = @ptrCast(@alignCast(ctx.?));
-        c.wl_callback_destroy(cb);
 
         app.platform.requestFrame(&frame_listener, app) catch |e| {
             std.log.err("Adding frame listener callback {any}", .{e});
