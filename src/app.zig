@@ -73,11 +73,11 @@ const State = struct {
 pub const App = struct {
     pub const frame_listener: c.wl_callback_listener = .{ .done = &frameDone };
 
-    logo: Image,
+    logo: *const Image,
     platform: *Wayland,
     state: State,
 
-    pub fn init(alloc: Allocator, logo: Image) !App {
+    pub fn init(alloc: Allocator, logo: *const Image) !App {
         const wayland = try Wayland.init(alloc);
 
         return .{ .logo = logo, .platform = wayland, .state = .{} };
@@ -117,7 +117,7 @@ pub const App = struct {
     pub fn render(self: *App, buf: *Buffer) !void {
         const fb = self.platform.frameBuffer(buf);
         Renderer.clear(fb.pixels, self.state.clear_colour);
-        Renderer.drawLogo(fb, &self.logo, @intCast(self.state.logo.pos[0]), @intCast(self.state.logo.pos[1]), @intFromEnum(self.state.logo.colour));
+        Renderer.drawLogo(fb, self.logo, @intCast(self.state.logo.pos[0]), @intCast(self.state.logo.pos[1]), @intFromEnum(self.state.logo.colour));
     }
 
     fn frameDone(ctx: ?*anyopaque, cb: ?*c.wl_callback, _: u32) callconv(.c) void {
