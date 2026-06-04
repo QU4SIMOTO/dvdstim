@@ -97,10 +97,12 @@ pub fn init(alloc: Allocator, logo: *const Image, io: std.Io) !Self {
         if (rand.boolean()) speed else -speed,
     };
 
+    const colour = rand.enumValue(State.Logo.Colour);
+
     return .{
         .logo = logo,
         .wayland = wayland,
-        .state = .{ .logo = .{ .pos = pos, .vel = vel } },
+        .state = .{ .logo = .{ .pos = pos, .vel = vel, .colour = colour } },
     };
 }
 
