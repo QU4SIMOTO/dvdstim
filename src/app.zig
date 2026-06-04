@@ -123,10 +123,9 @@ pub const App = struct {
         const app: *App = @ptrCast(@alignCast(ctx.?));
         c.wl_callback_destroy(cb);
 
-        const next = c.wl_surface_frame(app.platform.surface);
-        if (c.wl_callback_add_listener(next, &frame_listener, app) != 0) {
-            std.log.err("Adding frame listener callback", .{});
-        }
+        app.platform.requestFrame(&frame_listener, app) catch |e| {
+            std.log.err("Adding frame listener callback {any}", .{e});
+        };
 
         if (app.platform.getFreeBuffer()) |buf| {
             app.update() catch |e| {

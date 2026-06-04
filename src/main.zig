@@ -1,7 +1,5 @@
 const std = @import("std");
-const c = @import("c");
 const Image = @import("image.zig");
-const platform = @import("platform.zig");
 const app = @import("app.zig");
 
 const App = app.App;
@@ -21,8 +19,7 @@ pub fn main(init: std.process.Init) !void {
     if (application.platform.getFreeBuffer()) |buf| {
         try application.render(buf);
 
-        const cb = c.wl_surface_frame(application.platform.surface);
-        _ = c.wl_callback_add_listener(cb, &App.frame_listener, &application);
+        try application.platform.requestFrame(&App.frame_listener, &application);
 
         try application.present(buf);
     }

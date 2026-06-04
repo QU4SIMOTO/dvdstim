@@ -142,6 +142,11 @@ pub const Wayland = struct {
         return c.wl_display_dispatch(self.display) != -1;
     }
 
+    pub fn requestFrame(self: *Wayland, listener: *const c.wl_callback_listener, ctx: ?*anyopaque) !void {
+        const cb = c.wl_surface_frame(self.surface);
+        if (c.wl_callback_add_listener(cb, listener, ctx) != 0) return error.AddFrameListener;
+    }
+
     pub fn present(self: *Wayland, buf: *Buffer, x: i32, y: i32, w: i32, h: i32) void {
         c.wl_surface_attach(self.surface, buf.buffer, 0, 0);
         buf.busy = true;
@@ -241,6 +246,6 @@ pub const Wayland = struct {
     }
 
     fn registryGlobalRemoveHandler(_: ?*anyopaque, _: ?*c.wl_registry, name: u32) callconv(.c) void {
-        std.debug.print("removed: {d}\n", .{name});
+        std.log.debug("removed: {d}", .{name});
     }
 };
