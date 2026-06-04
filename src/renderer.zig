@@ -30,30 +30,37 @@ pub const Effect = union(enum) {
     scanlines: Colour,
     aberration: Colour,
     wave: Colour,
+    shine: Colour,
+    gradient: Colour,
+    glitch: Colour,
+    neon: Colour,
+    dissolve: Colour,
+    vhs: Colour,
+    strobe: Colour,
     pixelated,
     rainbow,
-    strobe,
     hue_cycle,
     plasma,
     radial,
+    conic,
 
     pub fn cycle(self: *Effect) void {
         switch (self.*) {
-            .solid, .pulse, .sparkle, .scanlines, .aberration, .wave => |*col| col.* = col.next(),
+            .solid, .pulse, .sparkle, .scanlines, .aberration, .wave, .shine, .gradient, .glitch, .neon, .dissolve, .vhs, .strobe => |*col| col.* = col.next(),
             else => {},
         }
     }
 
     pub fn setColour(self: *Effect, value: Colour) void {
         switch (self.*) {
-            .solid, .pulse, .sparkle, .scanlines, .aberration, .wave => |*col| col.* = value,
+            .solid, .pulse, .sparkle, .scanlines, .aberration, .wave, .shine, .gradient, .glitch, .neon, .dissolve, .vhs, .strobe => |*col| col.* = value,
             else => {},
         }
     }
 
     pub fn colour(self: Effect) ?Colour {
         return switch (self) {
-            .solid, .pulse, .sparkle, .scanlines, .aberration, .wave => |col| col,
+            .solid, .pulse, .sparkle, .scanlines, .aberration, .wave, .shine, .gradient, .glitch, .neon, .dissolve, .vhs, .strobe => |col| col,
             else => null,
         };
     }
@@ -95,7 +102,7 @@ pub const Renderer = struct {
             .pixelated => drawPixelated(fb, logo, x, y, ctx.rand),
             .rainbow => drawRainbow(fb, logo, x, y, ctx.phase),
             .pulse => |col| drawPulse(fb, logo, x, y, @intFromEnum(col), ctx.phase),
-            .strobe => drawStrobe(fb, logo, x, y, ctx.phase),
+            .strobe => |col| drawStrobe(fb, logo, x, y, @intFromEnum(col), ctx.phase),
             .hue_cycle => drawHueCycle(fb, logo, x, y, ctx.phase),
             .sparkle => |col| drawSparkle(fb, logo, x, y, @intFromEnum(col), ctx.rand),
             .plasma => drawPlasma(fb, logo, x, y, ctx.phase),
@@ -103,6 +110,13 @@ pub const Renderer = struct {
             .scanlines => |col| drawScanlines(fb, logo, x, y, @intFromEnum(col), ctx.phase),
             .aberration => |col| drawAberration(fb, logo, x, y, @intFromEnum(col)),
             .wave => |col| drawWave(fb, logo, x, y, @intFromEnum(col), ctx.phase),
+            .shine => |col| drawShine(fb, logo, x, y, @intFromEnum(col), ctx.phase),
+            .gradient => |col| drawGradient(fb, logo, x, y, @intFromEnum(col), @intFromEnum(col.next()), ctx.phase),
+            .glitch => |col| drawGlitch(fb, logo, x, y, @intFromEnum(col), ctx.rand),
+            .neon => |col| drawNeon(fb, logo, x, y, @intFromEnum(col), ctx.phase),
+            .dissolve => |col| drawDissolve(fb, logo, x, y, @intFromEnum(col), ctx.phase),
+            .vhs => |col| drawVhs(fb, logo, x, y, @intFromEnum(col), ctx.phase, ctx.rand),
+            .conic => drawConic(fb, logo, x, y, ctx.phase),
         }
     }
 
@@ -192,9 +206,9 @@ pub const Renderer = struct {
         drawLogo(fb, logo, x_off, y_off, (tr << 16) | (tg << 8) | tb);
     }
 
-    fn drawStrobe(fb: FrameBuffer, logo: *const Image, x_off: u32, y_off: u32, phase: f32) void {
-        const tint: u32 = if (@mod(phase, 48.0) < 24.0) 0xFFFFFF else 0xFF00FF;
-        drawLogo(fb, logo, x_off, y_off, tint);
+    fn drawStrobe(fb: FrameBuffer, logo: *const Image, x_off: u32, y_off: u32, tint: u32, phase: f32) void {
+        const c: u32 = if (@mod(phase, 48.0) < 24.0) 0xFFFFFF else tint;
+        drawLogo(fb, logo, x_off, y_off, c);
     }
 
     fn drawHueCycle(fb: FrameBuffer, logo: *const Image, x_off: u32, y_off: u32, phase: f32) void {
@@ -358,6 +372,215 @@ pub const Renderer = struct {
                 const g = @as(u32, @intFromFloat(tg * af));
                 const b = @as(u32, @intFromFloat(tb * af));
                 const a = @as(u32, @intFromFloat(af * 255.0));
+
+                fb.pixels[fb_i] = (a << 24) | (r << 16) | (g << 8) | b;
+            }
+        }
+    }
+
+    fn alphaXY(logo: *const Image, sx: i32, sy: i32, w: i32, h: i32) f32 {
+        if (sx < 0 or sx >= w or sy < 0 or sy >= h) return 0.0;
+        const logo_i = @as(usize, @intCast(sy)) * logo.width + @as(usize, @intCast(sx));
+        return @as(f32, @floatFromInt(logo.pixels[logo_i] >> 24)) / 255.0;
+    }
+
+    fn drawConic(fb: FrameBuffer, logo: *const Image, x_off: u32, y_off: u32, phase: f32) void {
+        const row_stride = fb.stride / 4;
+        const cx = @as(f32, @floatFromInt(logo.width)) / 2.0;
+        const cy = @as(f32, @floatFromInt(logo.height)) / 2.0;
+
+        for (0..logo.height) |y| {
+            const dy = @as(f32, @floatFromInt(y)) - cy;
+            for (0..logo.width) |x| {
+                const fb_i = (y + y_off) * row_stride + (x + x_off);
+                const logo_i = y * logo.width + x;
+
+                const a = logo.pixels[logo_i] >> 24;
+                const af = @as(f32, @floatFromInt(a)) / 255.0;
+
+                const dx = @as(f32, @floatFromInt(x)) - cx;
+                const ang = std.math.atan2(dy, dx) * 180.0 / std.math.pi + 180.0;
+                const hue = @mod(ang + phase, 360.0);
+                const rgb = hueRgb(hue);
+
+                const r = @as(u32, @intFromFloat(rgb[0] * af));
+                const g = @as(u32, @intFromFloat(rgb[1] * af));
+                const b = @as(u32, @intFromFloat(rgb[2] * af));
+
+                fb.pixels[fb_i] = (a << 24) | (r << 16) | (g << 8) | b;
+            }
+        }
+    }
+
+    fn drawShine(fb: FrameBuffer, logo: *const Image, x_off: u32, y_off: u32, tint: u32, phase: f32) void {
+        const tr = @as(f32, @floatFromInt((tint >> 16) & 0xFF));
+        const tg = @as(f32, @floatFromInt((tint >> 8) & 0xFF));
+        const tb = @as(f32, @floatFromInt(tint & 0xFF));
+        const row_stride = fb.stride / 4;
+        const fwidth = @as(f32, @floatFromInt(logo.width));
+        const sweep = @mod(phase / 360.0, 1.0) * fwidth;
+        const band = fwidth * 0.18;
+
+        for (0..logo.height) |y| {
+            for (0..logo.width) |x| {
+                const fb_i = (y + y_off) * row_stride + (x + x_off);
+                const logo_i = y * logo.width + x;
+
+                const a = logo.pixels[logo_i] >> 24;
+                const af = @as(f32, @floatFromInt(a)) / 255.0;
+
+                const d = @abs(@as(f32, @floatFromInt(x)) - sweep);
+                const hl = @max(0.0, 1.0 - d / band);
+
+                const r = @as(u32, @intFromFloat((tr + (255.0 - tr) * hl) * af));
+                const g = @as(u32, @intFromFloat((tg + (255.0 - tg) * hl) * af));
+                const b = @as(u32, @intFromFloat((tb + (255.0 - tb) * hl) * af));
+
+                fb.pixels[fb_i] = (a << 24) | (r << 16) | (g << 8) | b;
+            }
+        }
+    }
+
+    fn drawGradient(fb: FrameBuffer, logo: *const Image, x_off: u32, y_off: u32, tint_a: u32, tint_b: u32, phase: f32) void {
+        const ar = @as(f32, @floatFromInt((tint_a >> 16) & 0xFF));
+        const ag = @as(f32, @floatFromInt((tint_a >> 8) & 0xFF));
+        const ab = @as(f32, @floatFromInt(tint_a & 0xFF));
+        const br = @as(f32, @floatFromInt((tint_b >> 16) & 0xFF));
+        const bg = @as(f32, @floatFromInt((tint_b >> 8) & 0xFF));
+        const bb = @as(f32, @floatFromInt(tint_b & 0xFF));
+        const row_stride = fb.stride / 4;
+        const fwidth = @as(f32, @floatFromInt(logo.width));
+
+        for (0..logo.height) |y| {
+            for (0..logo.width) |x| {
+                const fb_i = (y + y_off) * row_stride + (x + x_off);
+                const logo_i = y * logo.width + x;
+
+                const a = logo.pixels[logo_i] >> 24;
+                const af = @as(f32, @floatFromInt(a)) / 255.0;
+
+                const tpos = @mod(@as(f32, @floatFromInt(x)) / fwidth + phase / 360.0, 1.0);
+                const t = @abs(2.0 * tpos - 1.0);
+
+                const r = @as(u32, @intFromFloat((ar + (br - ar) * t) * af));
+                const g = @as(u32, @intFromFloat((ag + (bg - ag) * t) * af));
+                const b = @as(u32, @intFromFloat((ab + (bb - ab) * t) * af));
+
+                fb.pixels[fb_i] = (a << 24) | (r << 16) | (g << 8) | b;
+            }
+        }
+    }
+
+    fn drawGlitch(fb: FrameBuffer, logo: *const Image, x_off: u32, y_off: u32, tint: u32, rand: std.Random) void {
+        const tr = @as(f32, @floatFromInt((tint >> 16) & 0xFF));
+        const tg = @as(f32, @floatFromInt((tint >> 8) & 0xFF));
+        const tb = @as(f32, @floatFromInt(tint & 0xFF));
+        const row_stride = fb.stride / 4;
+        const w = @as(i32, @intCast(logo.width));
+        const band = 6;
+
+        var by: usize = 0;
+        while (by < logo.height) : (by += band) {
+            const soff = rand.intRangeAtMost(i32, -8, 8);
+            for (by..@min(by + band, logo.height)) |y| {
+                for (0..logo.width) |x| {
+                    const fb_i = (y + y_off) * row_stride + (x + x_off);
+                    const af = alphaAt(logo, @as(i32, @intCast(x)) + soff, y, w);
+
+                    const r = @as(u32, @intFromFloat(tr * af));
+                    const g = @as(u32, @intFromFloat(tg * af));
+                    const b = @as(u32, @intFromFloat(tb * af));
+                    const a = @as(u32, @intFromFloat(af * 255.0));
+
+                    fb.pixels[fb_i] = (a << 24) | (r << 16) | (g << 8) | b;
+                }
+            }
+        }
+    }
+
+    fn drawNeon(fb: FrameBuffer, logo: *const Image, x_off: u32, y_off: u32, tint: u32, phase: f32) void {
+        const tr = @as(f32, @floatFromInt((tint >> 16) & 0xFF));
+        const tg = @as(f32, @floatFromInt((tint >> 8) & 0xFF));
+        const tb = @as(f32, @floatFromInt(tint & 0xFF));
+        const row_stride = fb.stride / 4;
+        const w = @as(i32, @intCast(logo.width));
+        const h = @as(i32, @intCast(logo.height));
+        const pulse = 0.6 + 0.4 * @sin(phase * std.math.pi / 180.0);
+
+        for (0..logo.height) |y| {
+            const yi = @as(i32, @intCast(y));
+            for (0..logo.width) |x| {
+                const fb_i = (y + y_off) * row_stride + (x + x_off);
+                const xi = @as(i32, @intCast(x));
+
+                const here = alphaXY(logo, xi, yi, w, h);
+                const minn = @min(
+                    @min(alphaXY(logo, xi - 1, yi, w, h), alphaXY(logo, xi + 1, yi, w, h)),
+                    @min(alphaXY(logo, xi, yi - 1, w, h), alphaXY(logo, xi, yi + 1, w, h)),
+                );
+                const edge = @max(0.0, here - minn) * pulse;
+                const base = here * 0.25;
+
+                const r = @as(u32, @intFromFloat(@min(255.0, tr * base + 255.0 * edge)));
+                const g = @as(u32, @intFromFloat(@min(255.0, tg * base + 255.0 * edge)));
+                const b = @as(u32, @intFromFloat(@min(255.0, tb * base + 255.0 * edge)));
+                const a = @as(u32, @intFromFloat(here * 255.0));
+
+                fb.pixels[fb_i] = (a << 24) | (r << 16) | (g << 8) | b;
+            }
+        }
+    }
+
+    fn drawDissolve(fb: FrameBuffer, logo: *const Image, x_off: u32, y_off: u32, tint: u32, phase: f32) void {
+        const tr = @as(f32, @floatFromInt((tint >> 16) & 0xFF));
+        const tg = @as(f32, @floatFromInt((tint >> 8) & 0xFF));
+        const tb = @as(f32, @floatFromInt(tint & 0xFF));
+        const row_stride = fb.stride / 4;
+
+        for (0..logo.height) |y| {
+            for (0..logo.width) |x| {
+                const fb_i = (y + y_off) * row_stride + (x + x_off);
+                const logo_i = y * logo.width + x;
+
+                const a = logo.pixels[logo_i] >> 24;
+                const thr = @as(f32, @floatFromInt((x * 131 + y * 57) % 360));
+
+                if (@mod(thr + phase, 360.0) < 200.0) {
+                    const af = @as(f32, @floatFromInt(a)) / 255.0;
+                    const r = @as(u32, @intFromFloat(tr * af));
+                    const g = @as(u32, @intFromFloat(tg * af));
+                    const b = @as(u32, @intFromFloat(tb * af));
+                    fb.pixels[fb_i] = (a << 24) | (r << 16) | (g << 8) | b;
+                } else {
+                    fb.pixels[fb_i] = 0;
+                }
+            }
+        }
+    }
+
+    fn drawVhs(fb: FrameBuffer, logo: *const Image, x_off: u32, y_off: u32, tint: u32, phase: f32, rand: std.Random) void {
+        const tr = @as(f32, @floatFromInt((tint >> 16) & 0xFF));
+        const tg = @as(f32, @floatFromInt((tint >> 8) & 0xFF));
+        const tb = @as(f32, @floatFromInt(tint & 0xFF));
+        const row_stride = fb.stride / 4;
+        const w = @as(i32, @intCast(logo.width));
+        const scroll = @as(usize, @intFromFloat(phase / 8.0));
+
+        for (0..logo.height) |y| {
+            const jit = rand.intRangeAtMost(i32, -2, 2);
+            const f: f32 = if (@mod(y + scroll, 3) == 0) 0.4 else 1.0;
+            for (0..logo.width) |x| {
+                const fb_i = (y + y_off) * row_stride + (x + x_off);
+                const xi = @as(i32, @intCast(x)) + jit;
+
+                const sr = alphaAt(logo, xi + 1, y, w);
+                const sg = alphaAt(logo, xi, y, w);
+                const sb = alphaAt(logo, xi - 1, y, w);
+
+                const r = @as(u32, @intFromFloat(tr * sr * f));
+                const g = @as(u32, @intFromFloat(tg * sg * f));
+                const b = @as(u32, @intFromFloat(tb * sb * f));
+                const a = @as(u32, @intFromFloat(@max(sr, @max(sg, sb)) * 255.0));
 
                 fb.pixels[fb_i] = (a << 24) | (r << 16) | (g << 8) | b;
             }

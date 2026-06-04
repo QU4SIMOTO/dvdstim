@@ -28,7 +28,7 @@ const State = struct {
     logo: Logo = .{},
     clear_colour: u32 = 0x00000000,
     hit_corner: bool = false,
-    bounce_effect: Effect = .{ .aberration = .red },
+    bounce_effect: Effect = .{ .solid = .red },
     corner_effect: Effect = .rainbow,
     phase: f32 = 0,
 };
