@@ -4,6 +4,8 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const stb = b.dependency("stb", .{});
+
     const translate_c = b.addTranslateC(.{
         .root_source_file = b.path("src/c.h"),
         .target = target,
@@ -11,7 +13,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     translate_c.addIncludePath(b.path("protocols"));
-    translate_c.addIncludePath(b.path("vendor"));
+    translate_c.addIncludePath(stb.path(""));
 
     const exe = b.addExecutable(.{ .name = "dvdstim", .root_module = b.createModule(.{ .root_source_file = b.path("src/main.zig"), .target = target, .optimize = optimize, .link_libc = true }) });
 
@@ -19,7 +21,8 @@ pub fn build(b: *std.Build) void {
 
     exe.root_module.addCSourceFile(.{ .file = b.path("protocols/xdg-shell-client-protocol.c") });
     exe.root_module.addCSourceFile(.{ .file = b.path("protocols/wlr-layer-shell-unstable-v1-protocol.c") });
-    exe.root_module.addCSourceFile(.{ .file = b.path("vendor/stb_image.c") });
+    exe.root_module.addCSourceFile(.{ .file = b.path("src/stb_image.c") });
+    exe.root_module.addIncludePath(stb.path(""));
 
     exe.root_module.linkSystemLibrary("wayland-client", .{});
 
