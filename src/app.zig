@@ -14,28 +14,46 @@ const Self = @This();
 io: std.Io,
 logo: *const Image,
 wayland: *Wayland,
+config: Config,
 state: State,
 
 const Vec2 = @Vector(2, i32);
 
-const State = struct {
-    const Logo = struct {
-        const speed: i32 = 3;
-        pos: Vec2 = .{ 0, 0 },
-        pre: Vec2 = .{ 0, 0 },
-        vel: Vec2 = .{ speed, speed },
-    };
-    logo: Logo = .{},
+pub const Config = struct {
+    speed: i32 = 3,
     clear_colour: u32 = 0x00000000,
-    hit_corner: bool = false,
     bounce_effect: Effect = .{ .solid = .red },
     corner_effect: Effect = .rainbow,
+};
+
+const State = struct {
+    const Logo = struct {
+        pos: Vec2,
+        pre: Vec2,
+        vel: Vec2,
+    };
+    logo: Logo,
+    hit_corner: bool = false,
     phase: f32 = 0,
+    effect: Effect,
+
+    pub fn init(
+        effect: Effect,
+        pos: Vec2,
+        vel: Vec2,
+    ) State {
+        return .{ .effect = effect, .logo = .{ .pos = pos, .pre = pos, .vel = vel } };
+    }
 };
 
 pub const frame_listener: c.wl_callback_listener = .{ .done = &frameDone };
 
-pub fn init(alloc: Allocator, logo: *const Image, io: std.Io) !Self {
+pub fn init(
+    alloc: Allocator,
+    io: std.Io,
+    config: Config,
+    logo: *const Image,
+) !Self {
     const wayland = try Wayland.init(alloc);
     const rng: std.Random.IoSource = .{ .io = io };
     const rand = rng.interface();
@@ -43,24 +61,28 @@ pub fn init(alloc: Allocator, logo: *const Image, io: std.Io) !Self {
     const max_x = @as(i32, @intCast(wayland.width)) - @as(i32, @intCast(logo.width)) - 1;
     const max_y = @as(i32, @intCast(wayland.height)) - @as(i32, @intCast(logo.height)) - 1;
     std.debug.assert(max_x >= 1 and max_y >= 1);
+
     const pos: Vec2 = .{ rand.intRangeAtMost(i32, 1, max_x), rand.intRangeAtMost(i32, 1, max_y) };
 
-    const speed = State.Logo.speed;
+    const speed = config.speed;
     const vel: Vec2 = .{
         if (rand.boolean()) speed else -speed,
         if (rand.boolean()) speed else -speed,
     };
 
-    const colour = rand.enumValue(Colour);
-
-    var state: State = .{ .logo = .{ .pos = pos, .vel = vel } };
-    state.bounce_effect.setColour(colour);
+    var bounce_effect = config.bounce_effect;
+    bounce_effect.setColour(rand.enumValue(Colour));
 
     return .{
         .io = io,
         .logo = logo,
         .wayland = wayland,
-        .state = state,
+        .config = config,
+        .state = State.init(
+            bounce_effect,
+            pos,
+            vel,
+        ),
     };
 }
 
@@ -85,18 +107,18 @@ pub fn update(self: *Self) !void {
 
     if (hit_x and hit_y) {
         self.state.hit_corner = true;
-        if (self.state.bounce_effect.colour()) |col| self.state.corner_effect.setColour(col);
+        self.state.effect = self.config.corner_effect;
         return;
     }
 
     if (hit_x) {
         self.state.logo.vel[0] *= -1;
-        self.state.bounce_effect.cycle();
+        self.state.effect.cycle();
     } else self.state.logo.pos[0] = next[0];
 
     if (hit_y) {
         self.state.logo.vel[1] *= -1;
-        self.state.bounce_effect.cycle();
+        self.state.effect.cycle();
     } else self.state.logo.pos[1] = next[1];
 }
 
@@ -111,14 +133,13 @@ pub fn present(self: *Self, buf: *Buffer) !void {
 pub fn render(self: *Self, buf: *Buffer) !void {
     const fb = self.wayland.frameBuffer(buf);
 
-    if (buf.last_logo) |rect| Renderer.clearRect(fb, rect, self.state.clear_colour);
+    if (buf.last_logo) |rect| Renderer.clearRect(fb, rect, self.config.clear_colour);
 
     const x: u32 = @intCast(self.state.logo.pos[0]);
     const y: u32 = @intCast(self.state.logo.pos[1]);
 
-    const effect = if (self.state.hit_corner) self.state.corner_effect else self.state.bounce_effect;
     const src: std.Random.IoSource = .{ .io = self.io };
-    Renderer.draw(effect, fb, self.logo, x, y, .{
+    Renderer.draw(self.state.effect, fb, self.logo, x, y, .{
         .phase = self.state.phase,
         .rand = src.interface(),
     });
