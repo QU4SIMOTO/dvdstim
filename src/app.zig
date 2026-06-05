@@ -24,6 +24,7 @@ pub const Config = struct {
     clear_colour: u32 = 0x00000000,
     bounce_effect: Effect = .{ .solid = .red },
     corner_effect: Effect = .rainbow,
+    random_start_colour: bool = false,
 };
 
 const State = struct {
@@ -71,7 +72,7 @@ pub fn init(
     };
 
     var bounce_effect = config.bounce_effect;
-    bounce_effect.setColour(rand.enumValue(Colour));
+    if (config.random_start_colour) bounce_effect.setColour(rand.enumValue(Colour));
 
     return .{
         .io = io,

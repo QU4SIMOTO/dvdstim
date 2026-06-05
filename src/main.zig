@@ -1,19 +1,23 @@
 const std = @import("std");
 const Image = @import("image.zig");
 const App = @import("app.zig");
+const Config = @import("config.zig");
 
 const logo_image_bytes = @embedFile("dvd-logo");
 
 pub fn main(init: std.process.Init) !void {
     const alloc = init.gpa;
 
-    var logo = try Image.fromBytes(alloc, logo_image_bytes[0..logo_image_bytes.len :0], .{ .w = 128, .h = 128 });
+    var config: Config = .{};
+    config.parseArgs(init.minimal.args) catch std.process.exit(1);
+
+    var logo = try Image.fromBytes(alloc, logo_image_bytes[0..logo_image_bytes.len :0], config.image);
     defer logo.deinit();
 
     var application = try App.init(
         alloc,
         init.io,
-        .{},
+        config.app,
         &logo,
     );
     defer application.deinit();

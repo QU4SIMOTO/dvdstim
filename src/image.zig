@@ -13,7 +13,10 @@ pixels: []u32,
 
 pub const Bounds = struct { w: u32, h: u32 };
 
-pub fn fromBytes(alloc: Allocator, bytes: []const u8, bounds: Bounds) !Self {
+pub const Config = struct { bounds: Bounds = .{ .w = 128, .h = 128 } };
+
+pub fn fromBytes(alloc: Allocator, bytes: []const u8, config: Config) !Self {
+    const bounds = config.bounds;
     std.debug.assert(bounds.w > 0 and bounds.h > 0);
 
     var width_c: c_int = 0;
