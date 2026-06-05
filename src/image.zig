@@ -11,7 +11,11 @@ height: u32,
 channels: u32,
 pixels: []u32,
 
-pub fn fromBytes(alloc: Allocator, bytes: []const u8, scale: u32) !Self {
+pub const Bounds = struct { w: u32, h: u32 };
+
+pub fn fromBytes(alloc: Allocator, bytes: []const u8, bounds: Bounds) !Self {
+    std.debug.assert(bounds.w > 0 and bounds.h > 0);
+
     var width_c: c_int = 0;
     var height_c: c_int = 0;
     var channels: c_int = 0;
@@ -50,7 +54,9 @@ pub fn fromBytes(alloc: Allocator, bytes: []const u8, scale: u32) !Self {
     const crop_w = max_x - min_x + 1;
     const crop_h = max_y - min_y + 1;
 
-    const div = if (scale == 0) 1 else scale;
+    const div_w = (crop_w + bounds.w - 1) / bounds.w;
+    const div_h = (crop_h + bounds.h - 1) / bounds.h;
+    const div = @max(@max(div_w, div_h), 1);
     const width = @max(crop_w / div, 1);
     const height = @max(crop_h / div, 1);
     const pixels = try alloc.alloc(u32, @as(usize, width) * height);
