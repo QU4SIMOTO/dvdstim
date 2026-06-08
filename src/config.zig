@@ -7,6 +7,53 @@ image: Image.Config = .{},
 
 const Self = @This();
 
+pub fn readDotFile(io: std.Io, alloc: std.mem.Allocator, environ: std.process.Environ) !Self {
+    const config_path = getConfigPath(alloc, environ) catch |err| switch (err) {
+        error.NoHomeDirectory => return .{},
+        else => return err,
+    };
+    defer alloc.free(config_path);
+
+    const dot_file_dir = std.Io.Dir.openDirAbsolute(io, config_path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return .{},
+        else => return err,
+    };
+
+    const config = dot_file_dir.readFileAllocOptions(io, "config.zon", alloc, .unlimited, .@"1", 0) catch |err| switch (err) {
+        error.FileNotFound => return .{},
+        else => return err,
+    };
+    defer alloc.free(config);
+
+    return try std.zon.parse.fromSlice(Self, alloc, config[0.. :0], null, .{});
+}
+
+fn getXdgConfigHome(alloc: std.mem.Allocator, environ: std.process.Environ) !?[]u8 {
+    return environ.getAlloc(alloc, "XDG_CONFIG_HOME") catch |err| switch (err) {
+        error.EnvironmentVariableMissing => null,
+        else => return err,
+    };
+}
+
+fn getHomePath(alloc: std.mem.Allocator, environ: std.process.Environ) ![]u8 {
+    return environ.getAlloc(alloc, "HOME") catch |err| switch (err) {
+        error.EnvironmentVariableMissing => return error.NoHomeDirectory,
+        else => return err,
+    };
+}
+
+fn getConfigPath(alloc: std.mem.Allocator, environ: std.process.Environ) ![]u8 {
+    const xdg_config_dir = try getXdgConfigHome(alloc, environ);
+    defer if (xdg_config_dir) |dir| alloc.free(dir);
+    if (xdg_config_dir) |path| {
+        return try std.fs.path.join(alloc, &.{ path, "dvdstim" });
+    } else {
+        const home_dir = try getHomePath(alloc, environ);
+        defer alloc.free(home_dir);
+        return try std.fs.path.join(alloc, &.{ home_dir, ".config", "dvdstim" });
+    }
+}
+
 pub fn parseArgs(self: *Self, args: std.process.Args) !void {
     var it: std.process.Args.Iterator = .init(args);
     _ = it.skip();

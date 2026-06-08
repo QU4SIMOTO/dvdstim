@@ -7,8 +7,9 @@ const logo_image_bytes = @embedFile("dvd-logo");
 
 pub fn main(init: std.process.Init) !void {
     const alloc = init.gpa;
+    const io = init.io;
 
-    var config: Config = .{};
+    var config = try Config.readDotFile(io, alloc, init.minimal.environ);
     config.parseArgs(init.minimal.args) catch std.process.exit(1);
 
     var logo = try Image.fromBytes(alloc, logo_image_bytes[0..logo_image_bytes.len :0], config.image);
@@ -16,7 +17,7 @@ pub fn main(init: std.process.Init) !void {
 
     var application = try App.init(
         alloc,
-        init.io,
+        io,
         config.app,
         &logo,
     );
